@@ -179,6 +179,30 @@ def calculate_conventional_marginal_cost(
     return marginal_cost
 
 
+def add_carriers(n: pypsa.Network) -> None:
+    """
+    Add carriers used in the system and define plotting colors.
+    """
+
+    carrier_data = {
+        "AC": {"color": "#000000"},
+        "solar": {"color": "#ffd92f"},
+        "onwind": {"color": "#1b9e77"},
+        "offwind": {"color": "#377eb8"},
+        "gas": {"color": "#e41a1c"},
+        "coal": {"color": "#4d4d4d"},
+        "nuclear": {"color": "#984ea3"},
+    }
+
+    for carrier, attrs in carrier_data.items():
+        if carrier not in n.carriers.index:
+            n.add(
+                "Carrier",
+                carrier,
+                **attrs,
+            )
+
+
 def attach_renewable_generators_dk(
     n: pypsa.Network,
     cost_data: pd.DataFrame,
@@ -248,8 +272,8 @@ def attach_conventional_generators_dk(
         CO2 price in EUR/tCO2.
     """
     conventional_generators = {
-        "OCGT": {"name": "DK_OCGT", "carrier": "gas"},
-        "CCGT": {"name": "DK_CCGT", "carrier": "gas"},
+        "OCGT": {"name": "DK_OCGT", "carrier": "OCGT"},
+        "CCGT": {"name": "DK_CCGT", "carrier": "CCGT"},
         "coal": {"name": "DK_coal", "carrier": "coal"},
         "nuclear": {"name": "DK_nuclear", "carrier": "nuclear"},
     }
@@ -302,8 +326,9 @@ def create_network_dk(
     n = pypsa.Network()
 
     electricity_load = timeseries_data["load"]
-
     n.set_snapshots(electricity_load.index)
+
+    add_carriers(n)
 
     n.add(
         "Bus",
@@ -315,6 +340,7 @@ def create_network_dk(
         "Load",
         "DK_electricity_demand",
         bus="DK_AC",
+        carrier="AC",
         p_set=electricity_load,
     )
 
@@ -349,11 +375,6 @@ def optimize_and_save_network(
     """
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    n.buses["carrier"] = n.buses["carrier"].astype(str)
-    n.generators["bus"] = n.generators["bus"].astype(str)
-    n.generators["carrier"] = n.generators["carrier"].astype(str)
-    n.loads["bus"] = n.loads["bus"].astype(str)
 
     n.optimize(solver_name="gurobi")
     n.export_to_netcdf(output_path)

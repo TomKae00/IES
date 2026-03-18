@@ -156,7 +156,6 @@ def calculate_conventional_marginal_cost(
         Marginal generation cost in EUR/MWh_el.
     """
     fuel_lookup = {
-        "OCGT": "gas",
         "CCGT": "gas",
         "coal": "coal",
         "nuclear": "uranium",
@@ -272,7 +271,6 @@ def attach_conventional_generators_dk(
         CO2 price in EUR/tCO2.
     """
     conventional_generators = {
-        "OCGT": {"name": "DK_OCGT", "carrier": "OCGT"},
         "CCGT": {"name": "DK_CCGT", "carrier": "CCGT"},
         "coal": {"name": "DK_coal", "carrier": "coal"},
         "nuclear": {"name": "DK_nuclear", "carrier": "nuclear"},

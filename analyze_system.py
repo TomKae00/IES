@@ -207,18 +207,36 @@ def plot_optimal_capacities(n: pypsa.Network, output_dir: Path) -> None:
 
 
 def plot_annual_mix(n: pypsa.Network, bus_carrier: str, output_dir: Path) -> None:
+    # Get annual generation by carrier
     s = get_annual_mix(n, bus_carrier)
 
-    fig, ax = plt.subplots(figsize=(8, 4))
-    s.plot(kind="bar", ax=ax)
+    fig, ax = plt.subplots(figsize=(8, 8))  # square figure for pie
 
-    ax.set_title("Annual electricity mix")
-    ax.set_ylabel("Generation [MWh]")
-    ax.set_xlabel("")
-    ax.grid(axis="y", alpha=0.3)
+    # Plot pie chart
+    wedges, texts, autotexts = ax.pie(
+        s,
+        labels=None,  # we use a legend instead
+        autopct="%1.1f%%",
+        startangle=90,
+        colors=plt.cm.tab20.colors[:len(s)],
+        wedgeprops={"edgecolor": "white"},
+        textprops={"color": "black"},
+    )
+
+    # Add legend in bottom-right
+    ax.legend(
+        wedges,
+        s.index,
+        title="Technology",
+        loc="lower right",
+        bbox_to_anchor=(1, 0),  # position relative to axes
+        fontsize=10,
+    )
+
+    ax.set_title("Annual electricity mix", fontsize=14)
 
     fig.tight_layout()
-    fig.savefig(output_dir / "annual_electricity_mix.png", dpi=300)
+    fig.savefig(output_dir / "annual_electricity_mix_pie.png", dpi=300)
     plt.close(fig)
 
 

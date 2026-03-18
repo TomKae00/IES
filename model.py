@@ -1,7 +1,9 @@
 import os
 from pathlib import Path
+
 import pandas as pd
 import pypsa
+
 
 print(os.getcwd())
 
@@ -65,21 +67,32 @@ def prepare_costs(cost_file, financial_parameters, number_of_years):
 
     cost_data = cost_data.fillna(financial_parameters["fill_values"])
 
-    def annuity_factor(row):
-        return (
-            calculate_annuity(row["lifetime"], financial_parameters["r"])
-            + row["FOM"] / 100
-        )
+    valid_investment_rows = (
+        cost_data["investment"].fillna(0) > 0
+    ) & (
+        cost_data["lifetime"].fillna(0) > 0
+    )
 
-    cost_data["annuity_factor"] = cost_data.apply(annuity_factor, axis=1)
-    cost_data["fixed"] = (
-        cost_data["annuity_factor"] * cost_data["investment"] * number_of_years
+    cost_data["annuity_factor"] = 0.0
+    cost_data.loc[valid_investment_rows, "annuity_factor"] = (
+        cost_data.loc[valid_investment_rows].apply(
+            lambda row: calculate_annuity(row["lifetime"], financial_parameters["r"])
+            + row["FOM"] / 100,
+            axis=1,
+        )
+    )
+
+    cost_data["fixed"] = 0.0
+    cost_data.loc[valid_investment_rows, "fixed"] = (
+        cost_data.loc[valid_investment_rows, "annuity_factor"]
+        * cost_data.loc[valid_investment_rows, "investment"]
+        * number_of_years
     )
 
     return cost_data
 
 
-def load_dk_timeseries(timeseries_file: str, year: str = "2016") -> dict:
+def load_dk_timeseries(timeseries_file: str, year: str) -> dict:
     """
     Load Danish electricity demand and renewable generation data and
     compute capacity factors for solar, onshore wind and offshore wind.
@@ -94,7 +107,8 @@ def load_dk_timeseries(timeseries_file: str, year: str = "2016") -> dict:
     Returns
     -------
     dict
-        Dictionary containing electricity demand and renewable capacity factors.
+        Dictionary containing electricity demand and renewable capacity
+        factor time series.
     """
     raw_timeseries = pd.read_csv(timeseries_file)
 
@@ -146,7 +160,7 @@ def calculate_conventional_marginal_cost(
     cost_data : pd.DataFrame
         Prepared technology cost table.
     technology : str
-        Generator technology, e.g. "OCGT", "CCGT", "coal", or "nuclear".
+        Generator technology, e.g. "CCGT", "coal", or "nuclear".
     co2_price : float
         CO2 price in EUR/tCO2.
 
@@ -181,8 +195,12 @@ def calculate_conventional_marginal_cost(
 def add_carriers(n: pypsa.Network) -> None:
     """
     Add carriers used in the system and define plotting colors.
-    """
 
+    Parameters
+    ----------
+    n : pypsa.Network
+        PyPSA network.
+    """
     carrier_data = {
         "AC": {"color": "#000000"},
         "solar": {"color": "#ffd92f"},
@@ -191,6 +209,9 @@ def add_carriers(n: pypsa.Network) -> None:
         "gas": {"color": "#e41a1c"},
         "coal": {"color": "#4d4d4d"},
         "nuclear": {"color": "#984ea3"},
+        "battery": {"color": "#ff7f00"},
+        "battery charger": {"color": "#a65628"},
+        "battery discharger": {"color": "#f781bf"},
     }
 
     for carrier, attrs in carrier_data.items():
@@ -271,7 +292,7 @@ def attach_conventional_generators_dk(
         CO2 price in EUR/tCO2.
     """
     conventional_generators = {
-        "CCGT": {"name": "DK_CCGT", "carrier": "CCGT"},
+        "CCGT": {"name": "DK_CCGT", "carrier": "gas"},
         "coal": {"name": "DK_coal", "carrier": "coal"},
         "nuclear": {"name": "DK_nuclear", "carrier": "nuclear"},
     }
@@ -298,14 +319,77 @@ def attach_conventional_generators_dk(
         )
 
 
+def attach_battery_storage_dk(
+    n: pypsa.Network,
+    cost_data: pd.DataFrame,
+) -> None:
+    """
+    Attach a battery storage system to the Danish one-node network.
+
+    The battery is represented by:
+    - one battery bus
+    - one Store for the energy capacity
+    - one charging Link
+    - one discharging Link
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        PyPSA network.
+    cost_data : pd.DataFrame
+        Prepared technology cost table.
+    """
+    battery_bus = "DK_battery"
+
+    n.add(
+        "Bus",
+        battery_bus,
+        carrier="battery",
+    )
+
+    n.add(
+        "Store",
+        "DK_battery_store",
+        bus=battery_bus,
+        carrier="battery",
+        e_cyclic=True,
+        e_nom_extendable=True,
+        capital_cost=cost_data.at["battery storage", "fixed"],
+    )
+
+    n.add(
+        "Link",
+        "DK_battery_charger",
+        bus0="DK_AC",
+        bus1=battery_bus,
+        carrier="battery charger",
+        efficiency=cost_data.at["battery inverter", "efficiency"] ** 0.5,
+        capital_cost=cost_data.at["battery inverter", "fixed"],
+        marginal_cost=cost_data.at["battery inverter", "VOM"],
+        p_nom_extendable=True,
+    )
+
+    n.add(
+        "Link",
+        "DK_battery_discharger",
+        bus0=battery_bus,
+        bus1="DK_AC",
+        carrier="battery discharger",
+        efficiency=cost_data.at["battery inverter", "efficiency"] ** 0.5,
+        marginal_cost=cost_data.at["battery inverter", "VOM"],
+        p_nom_extendable=True,
+    )
+
+
 def create_network_dk(
     cost_data: pd.DataFrame,
     timeseries_data: dict,
     co2_price: float,
+    with_battery_storage: bool,
 ) -> pypsa.Network:
     """
     Create a one-node PyPSA network for Denmark with electricity demand,
-    renewable generators and conventional generators.
+    renewable generators, conventional generators, and optional battery storage.
 
     Parameters
     ----------
@@ -315,6 +399,8 @@ def create_network_dk(
         Dictionary containing electricity demand and renewable capacity factors.
     co2_price : float
         CO2 price in EUR/tCO2.
+    with_battery_storage : bool, optional
+        Whether to include battery storage in the network.
 
     Returns
     -------
@@ -354,7 +440,43 @@ def create_network_dk(
         co2_price=co2_price,
     )
 
+    if with_battery_storage:
+        attach_battery_storage_dk(
+            n=n,
+            cost_data=cost_data,
+        )
+
     return n
+
+
+def custom_constraints(n: pypsa.Network, sns) -> None:
+    """
+    Add custom optimisation constraints to the PyPSA model.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        PyPSA network with an already created optimisation model.
+    sns :
+        Snapshots passed by PyPSA during optimisation.
+    """
+    if n.links.empty or not n.links.p_nom_extendable.any():
+        return
+
+    charger_links = n.links.index[n.links.index.str.contains("battery_charger")]
+    discharger_links = n.links.index[n.links.index.str.contains("battery_discharger")]
+
+    if len(charger_links) == 0 or len(discharger_links) == 0:
+        return
+
+    charger_p_nom = n.model["Link-p_nom"].loc[charger_links]
+    discharger_p_nom = n.model["Link-p_nom"].loc[discharger_links]
+
+    discharger_efficiency = n.links.loc[discharger_links, "efficiency"].values
+
+    lhs = charger_p_nom - discharger_p_nom * discharger_efficiency
+
+    n.model.add_constraints(lhs == 0, name="Link-battery_charger_ratio")
 
 
 def optimize_and_save_network(
@@ -374,7 +496,15 @@ def optimize_and_save_network(
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    n.optimize(solver_name="gurobi")
+    solver_options = {}
+
+    n.optimize(
+        n.snapshots,
+        extra_functionality=custom_constraints,
+        solver_name="gurobi",
+        solver_options=solver_options,
+    )
+
     n.export_to_netcdf(output_path)
 
     print(f"Optimized network saved to: {output_path}")
@@ -389,25 +519,33 @@ if __name__ == "__main__":
         "co2_price": 80.0,
     }
 
-    cost_file = f"cost_data/costs_{financial_parameters['year']}.csv"
-    timeseries_file = "Data/time_series_60min_singleindex_filtered_DK.csv"
-    output_file = "results/dk_network_2016.nc"
+    scenario_parameters = {
+        "weather_year": "2016",
+        "with_battery_storage": True,
+    }
+
+    file_paths = {
+        "cost_file": f"cost_data/costs_{financial_parameters['year']}.csv",
+        "timeseries_file": "Data/time_series_60min_singleindex_filtered_DK.csv",
+        "output_file": "results/dk_network_2016.nc",
+    }
 
     cost_data = prepare_costs(
-        cost_file=cost_file,
+        cost_file=file_paths["cost_file"],
         financial_parameters=financial_parameters,
         number_of_years=financial_parameters["nyears"],
     )
 
     timeseries_data = load_dk_timeseries(
-        timeseries_file=timeseries_file,
-        year="2016",
+        timeseries_file=file_paths["timeseries_file"],
+        year=scenario_parameters["weather_year"],
     )
 
     n = create_network_dk(
         cost_data=cost_data,
         timeseries_data=timeseries_data,
         co2_price=financial_parameters["co2_price"],
+        with_battery_storage=scenario_parameters["with_battery_storage"],
     )
 
     print("\nBUSES")
@@ -419,18 +557,33 @@ if __name__ == "__main__":
     print("\nLOADS")
     print(n.loads.dtypes)
 
+    print("\nSTORES")
+    print(n.stores.dtypes)
+
+    print("\nLINKS")
+    print(n.links.dtypes)
+
     print("\nINDEX DTYPES")
     print("buses index:", n.buses.index.dtype)
     print("generators index:", n.generators.index.dtype)
     print("loads index:", n.loads.index.dtype)
+    print("stores index:", n.stores.index.dtype)
+    print("links index:", n.links.index.dtype)
 
     optimize_and_save_network(
         n=n,
-        output_file=output_file,
+        output_file=file_paths["output_file"],
     )
 
-    print("\nOptimized capacities [MW]:")
+    print("\nOptimized generator capacities [MW]:")
     print(n.generators.p_nom_opt)
+
+    if scenario_parameters["with_battery_storage"]:
+        print("\nOptimized battery energy capacity [MWh]:")
+        print(n.stores.e_nom_opt)
+
+        print("\nOptimized battery power capacities [MW]:")
+        print(n.links.p_nom_opt)
 
     print("\nObjective value:")
     print(n.objective)

@@ -481,6 +481,7 @@ def create_regional_network(
     all_timeseries_data: dict,
     co2_price: float,
     with_battery_storage: bool,
+    with_interconnectors: bool,
 ) -> pypsa.Network:
     """
     Create a regional PyPSA network with Denmark and neighbouring countries.
@@ -535,7 +536,8 @@ def create_regional_network(
             cost_data=cost_data,
         )
 
-    attach_interconnectors_dk_region(n)
+    if with_interconnectors:
+        attach_interconnectors_dk_region(n)
 
     return n
 
@@ -613,7 +615,8 @@ if __name__ == "__main__":
     scenario_parameters = {
         "weather_year": "2016",
         "with_battery_storage": True,
-        "countries": ["DK", "DE", "SE", "NO"],
+        "with_interconnectors": True,
+        "countries": ["DK", "DE", "SE", "NO"], #
     }
 
     file_paths = {
@@ -642,6 +645,7 @@ if __name__ == "__main__":
         all_timeseries_data=all_timeseries_data,
         co2_price=financial_parameters["co2_price"],
         with_battery_storage=scenario_parameters["with_battery_storage"],
+        with_interconnectors=scenario_parameters["with_interconnectors"],
     )
 
     print("\nBUSES")

@@ -12,7 +12,6 @@ import pypsa
 NETWORK_FILE = "results/dk_network_2016.nc"
 OUTPUT_DIR = "results/task1_analysis"
 
-
 # =========================================================
 # HELPERS
 # =========================================================
@@ -188,73 +187,68 @@ def get_energy_balance_timeseries(n: pypsa.Network, bus_carrier: str) -> pd.Data
 
 
 # =========================================================
-# PLOTTING
+# PLOTTING (MANUAL - PANDAS / MATPLOTLIB)
 # =========================================================
 
 def plot_optimal_capacities(n: pypsa.Network, output_dir: Path) -> None:
-    fig, ax, _ = n.statistics.optimal_capacity.plot.bar(
-        comps=["Generator"],
-        aggregate_groups="sum",
-        nice_names=False,
-        figsize=(8, 4),
-    )
+    s = get_optimal_capacity(n)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    s.plot(kind="bar", ax=ax)
+
     ax.set_title("Optimal generator capacities")
     ax.set_ylabel("Capacity [MW]")
     ax.set_xlabel("")
     ax.grid(axis="y", alpha=0.3)
+
     fig.tight_layout()
     fig.savefig(output_dir / "optimal_capacities.png", dpi=300)
     plt.close(fig)
 
 
 def plot_annual_mix(n: pypsa.Network, bus_carrier: str, output_dir: Path) -> None:
-    fig, ax, _ = n.statistics.energy_balance.plot.bar(
-        comps=["Generator"],
-        bus_carrier=bus_carrier,
-        aggregate_time="sum",
-        aggregate_groups="sum",
-        nice_names=False,
-        figsize=(8, 4),
-    )
+    s = get_annual_mix(n, bus_carrier)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    s.plot(kind="bar", ax=ax)
+
     ax.set_title("Annual electricity mix")
     ax.set_ylabel("Generation [MWh]")
     ax.set_xlabel("")
     ax.grid(axis="y", alpha=0.3)
+
     fig.tight_layout()
     fig.savefig(output_dir / "annual_electricity_mix.png", dpi=300)
     plt.close(fig)
 
 
 def plot_capacity_factors(n: pypsa.Network, bus_carrier: str, output_dir: Path) -> None:
-    fig, ax, _ = n.statistics.capacity_factor.plot.bar(
-        comps=["Generator"],
-        bus_carrier=bus_carrier,
-        aggregate_groups="sum",
-        nice_names=False,
-        figsize=(8, 4),
-    )
+    s = get_capacity_factor(n, bus_carrier)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    s.plot(kind="bar", ax=ax)
+
     ax.set_title("Capacity factors by technology")
     ax.set_ylabel("Capacity factor [-]")
     ax.set_xlabel("")
     ax.grid(axis="y", alpha=0.3)
+
     fig.tight_layout()
     fig.savefig(output_dir / "capacity_factors.png", dpi=300)
     plt.close(fig)
 
 
 def plot_curtailment(n: pypsa.Network, bus_carrier: str, output_dir: Path) -> None:
-    fig, ax, _ = n.statistics.curtailment.plot.bar(
-        comps=["Generator"],
-        bus_carrier=bus_carrier,
-        aggregate_time="sum",
-        aggregate_groups="sum",
-        nice_names=False,
-        figsize=(8, 4),
-    )
+    s = get_curtailment(n, bus_carrier)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    s.plot(kind="bar", ax=ax)
+
     ax.set_title("Curtailment by technology")
     ax.set_ylabel("Curtailment [MWh]")
     ax.set_xlabel("")
     ax.grid(axis="y", alpha=0.3)
+
     fig.tight_layout()
     fig.savefig(output_dir / "curtailment.png", dpi=300)
     plt.close(fig)
@@ -275,6 +269,8 @@ def plot_dispatch_week(
     ax.set_ylabel("Dispatch [MW]")
     ax.set_xlabel("")
     ax.legend(title="Technology", ncol=3, fontsize=9)
+    ax.grid(alpha=0.3)
+
     fig.tight_layout()
     fig.savefig(output_dir / f"dispatch_{season}_week.png", dpi=300)
     plt.close(fig)
@@ -284,7 +280,11 @@ def plot_duration_curves(dispatch_ts: pd.DataFrame, output_dir: Path) -> None:
     fig, ax = plt.subplots(figsize=(9, 5))
 
     for carrier in dispatch_ts.columns:
-        duration = dispatch_ts[carrier].sort_values(ascending=False).reset_index(drop=True)
+        duration = (
+            dispatch_ts[carrier]
+            .sort_values(ascending=False)
+            .reset_index(drop=True)
+        )
         ax.plot(duration, label=carrier)
 
     ax.set_title("Dispatch duration curves")
@@ -292,6 +292,7 @@ def plot_duration_curves(dispatch_ts: pd.DataFrame, output_dir: Path) -> None:
     ax.set_ylabel("Dispatch [MW]")
     ax.grid(alpha=0.3)
     ax.legend()
+
     fig.tight_layout()
     fig.savefig(output_dir / "dispatch_duration_curves.png", dpi=300)
     plt.close(fig)
@@ -306,6 +307,11 @@ def export_summary_tables(n: pypsa.Network, bus_carrier: str, output_dir: Path) 
     annual_mix = get_annual_mix(n, bus_carrier)
     capacity_factor = get_capacity_factor(n, bus_carrier)
     curtailment = get_curtailment(n, bus_carrier)
+
+    optimal_capacity = optimal_capacity.groupby("carrier").sum()
+    annual_mix = annual_mix.groupby("carrier").sum()
+    capacity_factor = capacity_factor.groupby("carrier").mean()
+    curtailment = curtailment.groupby("carrier").sum()
 
     summary = pd.concat(
         [optimal_capacity, annual_mix, capacity_factor, curtailment],
@@ -335,6 +341,8 @@ def export_summary_tables(n: pypsa.Network, bus_carrier: str, output_dir: Path) 
 def main() -> None:
     output_dir = ensure_output_dir(OUTPUT_DIR)
     n = pypsa.Network(NETWORK_FILE)
+    n.sanitize()
+
 
     bus_carrier = get_single_bus_carrier(n)
     print(f"Detected bus carrier: {bus_carrier}")

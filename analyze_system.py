@@ -316,6 +316,162 @@ def plot_duration_curves(dispatch_ts: pd.DataFrame, output_dir: Path) -> None:
     plt.close(fig)
 
 
+def plot_installed_capacity_by_weather_years(
+    capacity_by_year: pd.DataFrame,
+    output_dir: Path,
+    title: str = "Optimized installed capacity by generator across weather years",
+    filename: str = "installed_capacity_by_weather_years.png",
+) -> None:
+    """Plot installed capacity by generator across weather years as connected lines."""
+
+    if "generator" in capacity_by_year.columns:
+        capacity_by_year = capacity_by_year.set_index("generator")
+
+    # If years are columns, transpose to have years on x-axis
+    if capacity_by_year.columns.dtype == object:
+        years = pd.to_numeric(capacity_by_year.columns, errors="coerce")
+        if years.isna().all():
+            raise ValueError("Column labels could not be parsed as weather years.")
+        capacity_by_year.columns = years
+
+    capacity_by_year = capacity_by_year.copy()
+    capacity_by_year.columns = pd.to_numeric(capacity_by_year.columns, errors="coerce")
+    capacity_by_year = capacity_by_year.loc[:, capacity_by_year.columns.notna()]
+    if capacity_by_year.shape[1] == 0:
+        raise ValueError("No numeric weather-year columns found in installed capacity data.")
+
+    capacity_by_year = capacity_by_year.sort_index(axis=1)
+    df = capacity_by_year.T
+    df.index = pd.to_numeric(df.index, errors="coerce")
+    df = df[~df.index.isna()]
+    df = df.sort_index()
+
+    # Use clean white background with gridlines. Keep this compatible with default matplotlib styles.
+    plt.style.use("default")
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    n_generators = len(df.columns)
+    for generator in df.columns:
+        series = df[generator].astype(float)
+        if series.dropna().empty:
+            continue
+        ax.plot(df.index, series, marker="o", linewidth=1.8, markersize=5, label=generator)
+
+    ax.set_title(title, fontsize=14, weight="bold")
+    ax.set_xlabel("Weather year")
+    ax.set_ylabel("Installed capacity [MW]")
+    ax.grid(alpha=0.35)
+
+    # X-axis ticks and label rotation only if needed
+    ax.set_xticks(df.index)
+    if len(df.index) > 6 or any(len(str(x)) > 4 for x in df.index):
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+
+    # Direct labels near right end for readability
+    use_direct_labels = n_generators <= 10
+    if use_direct_labels:
+        x_last = df.index.max()
+        x_span = df.index.max() - df.index.min() if len(df.index) > 1 else 1
+        x_offset = x_span * 0.01 if x_span != 0 else 0.1
+        for generator in df.columns:
+            s = df[generator].dropna()
+            if s.empty:
+                continue
+            x = s.index[-1]
+            y = s.iloc[-1]
+            ax.text(
+                x + x_offset,
+                y,
+                generator,
+                fontsize=9,
+                va="center",
+                clip_on=False,
+            )
+        ax.legend([], [], frameon=False)
+    else:
+        ax.legend(title="Generator", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / filename, dpi=300)
+    plt.close(fig)
+
+
+def plot_installed_capacity_by_generator(df: pd.DataFrame, output_path: str | None = None, generator_order: list[str] | None = None):
+    """
+    Plot installed capacity by generator with one line per weather year.
+    """
+    # Validate input
+    required = {"generator", "weather_year", "installed_capacity"}
+    if not required.issubset(df.columns):
+        raise ValueError(f"DataFrame must contain columns: {required}")
+
+    # Drop missing values safely
+    df = df.copy()
+    df = df.dropna(subset=["generator", "weather_year", "installed_capacity"])
+
+    # Keep generator order from data unless custom order provided
+    if generator_order is not None:
+        gen_order = list(generator_order)
+    else:
+        # preserve appearance order of first occurrence
+        gen_order = list(dict.fromkeys(df["generator"].tolist()))
+
+    df["generator"] = pd.Categorical(df["generator"], categories=gen_order, ordered=True)
+
+    # Pivot into wide format for line plotting by weather year
+    pivot = (
+        df
+        .pivot_table(
+            index="generator",
+            columns="weather_year",
+            values="installed_capacity",
+            aggfunc="mean"  # handles duplicates gracefully
+        )
+        .reindex(gen_order)
+    )
+
+    # Style
+    try:
+        plt.style.use("seaborn-whitegrid")
+    except OSError:
+        plt.style.use("default")
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Verify data exists
+    if df.empty:
+        raise ValueError("DataFrame is empty after dropping missing rows. Provide valid data.")
+
+    # Plot one line per weather year
+    for year in pivot.columns:
+        series = pivot[year]
+        if series.dropna().empty:
+            continue
+        ax.plot(
+            pivot.index,
+            series,
+            marker="o",
+            linewidth=1.8,
+            markersize=6,
+            label=str(year),
+        )
+
+    ax.set_title("Optimized installed capacity by generator across weather years", fontsize=14, weight="bold")
+    ax.set_xlabel("Generator")
+    ax.set_ylabel("Installed capacity [MW]")
+    ax.legend(title="Weather year")
+    ax.tick_params(axis="x", rotation=45)
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+
+    if output_path:
+        fig.savefig(output_path, dpi=300)
+
+    plt.show()
+    plt.close(fig)
+
+# Example usage:
+# plot_installed_capacity_by_generator(df, output_path="installed_capacity_by_generator.png")
+
 # =========================================================
 # SUMMARY TABLES
 # =========================================================
@@ -377,11 +533,39 @@ def main() -> None:
     plot_annual_mix(n, bus_carrier, output_dir)
     plot_capacity_factors(n, bus_carrier, output_dir)
     plot_curtailment(n, bus_carrier, output_dir)
+    
 
     # Seasonal dispatch and duration curves
     plot_dispatch_week(dispatch_ts, season_weeks["winter"], "winter", output_dir)
     plot_dispatch_week(dispatch_ts, season_weeks["summer"], "summer", output_dir)
     plot_duration_curves(dispatch_ts, output_dir)
+
+    # Interannual installed capacity by weather year
+    generator_capacity_path = Path("results/interannual_sensitivity/generator_capacity_by_year.csv")
+    if generator_capacity_path.exists():
+        capacity_by_year = pd.read_csv(generator_capacity_path)
+        plot_installed_capacity_by_weather_years(
+            capacity_by_year,
+            output_dir,
+        )
+
+        # Convert to long format for per-generator line plot by weather year
+        if "generator" in capacity_by_year.columns:
+            df_installed = (
+                capacity_by_year
+                .melt(id_vars="generator", var_name="weather_year", value_name="installed_capacity")
+                .dropna(subset=["generator", "weather_year", "installed_capacity"])
+            )
+            df_installed["weather_year"] = pd.to_numeric(df_installed["weather_year"], errors="coerce")
+            df_installed = df_installed.dropna(subset=["weather_year", "installed_capacity"])
+            plot_installed_capacity_by_generator(
+                df_installed,
+                output_path=str(output_dir / "installed_capacity_by_generator.png"),
+            )
+        else:
+            print("Warning: 'generator' column missing in generator_capacity_by_year data; skipping generator line plot.")
+    else:
+        print(f"Warning: {generator_capacity_path} not found; skipping interannual capacity chart.")
 
     print("\nTask 1 analysis finished.")
     print(f"Results saved to: {output_dir}")

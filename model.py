@@ -4,6 +4,14 @@ from pathlib import Path
 import pandas as pd
 import pypsa
 
+import logging
+
+gurobi_logger = logging.getLogger("gurobipy")
+gurobi_logger.setLevel(logging.CRITICAL)
+gurobi_logger.disabled = True
+gurobi_logger.propagate = False
+gurobi_logger.handlers.clear()
+
 
 print(os.getcwd())
 

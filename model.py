@@ -614,9 +614,9 @@ if __name__ == "__main__":
 
     scenario_parameters = {
         "weather_year": "2016",
-        "with_battery_storage": False,
-        "with_interconnectors": False,
-        "countries": ["DK"], # "DE", "SE", "NO"
+        "with_battery_storage": True,
+        "with_interconnectors": True,
+        "countries": ["DK", "DE", "SE", "NO"]
     }
 
     file_paths = {

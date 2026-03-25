@@ -1,0 +1,5 @@
+line_name,bus0,bus1,s_nom_MW,x,max_abs_flow_MW,mean_abs_flow_MW,utilization_max_pu,congestion_hours
+DK_NO,DK,NO,1700.0,0.1,1700.0,1484.3813873490685,1.0,0
+DK_SE,DK,SE,715.0,0.1,715.0,663.9000839652092,1.0,0
+DK_DE,DK,DE,1000.0,0.1,1000.0,850.8047745359261,1.0,0
+DE_SE,DE,SE,600.0,0.1,600.0,592.1359750614523,1.0,0

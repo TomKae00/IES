@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pypsa
 
+from interconnectors_analyze import load_network
+
 
 # =========================================================
 # CONFIG
@@ -240,6 +242,60 @@ def plot_annual_mix(n: pypsa.Network, bus_carrier: str, output_dir: Path) -> Non
     plt.close(fig)
 
 
+def plot_annual_mix_from_balance(n: pypsa.Network, output_dir: Path) -> None:
+    balance = n.statistics.energy_balance(aggregate_time=False)
+
+    # group by carrier, with time on rows
+    balance_by_carrier = balance.groupby(level="carrier").sum().T
+
+    # drop empty/all-zero carriers
+    balance_by_carrier = balance_by_carrier.dropna(axis=1, how="all")
+    balance_by_carrier = balance_by_carrier.loc[
+        :, (balance_by_carrier.fillna(0).abs() > 0).any(axis=0)
+    ]
+
+    # remove bookkeeping / unwanted carriers
+    balance_by_carrier = balance_by_carrier.drop(
+        columns=["electricity", "battery", "battery charger", "battery discharger"],
+        errors="ignore",
+    )
+
+    # keep only positive contributions
+    positive_balance = balance_by_carrier.clip(lower=0)
+
+    # annual generation by carrier
+    annual_mix = positive_balance.sum(axis=0)
+
+    # remove any zero entries after clipping
+    annual_mix = annual_mix[annual_mix > 0]
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    wedges, texts, autotexts = ax.pie(
+        annual_mix,
+        labels=None,
+        autopct="%1.1f%%",
+        startangle=90,
+        wedgeprops={"edgecolor": "white"},
+        textprops={"color": "black"},
+    )
+
+    ax.legend(
+        wedges,
+        annual_mix.index,
+        title="Technology",
+        loc="lower right",
+        bbox_to_anchor=(1, 0),
+        fontsize=10,
+    )
+
+    ax.set_title("Annual electricity mix")
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "annual_electricity_mix_from_balance.png", dpi=300)
+    plt.close(fig)
+
+
 def plot_capacity_factors(n: pypsa.Network, bus_carrier: str, output_dir: Path) -> None:
     s = get_capacity_factor(n, bus_carrier)
 
@@ -294,22 +350,70 @@ def plot_dispatch_week(
     plt.close(fig)
 
 
-def plot_duration_curves(dispatch_ts: pd.DataFrame, output_dir: Path) -> None:
-    fig, ax = plt.subplots(figsize=(9, 5))
+def plot_balance_week(n: pypsa.Network, output_dir: Path, season: str) -> None:
+    """
+    Plot the balance for a specific week.
+    """
+    season_weeks = get_representative_weeks(n.snapshots)
+    balance = n.statistics.energy_balance(aggregate_time=False)
 
-    for carrier in dispatch_ts.columns:
-        duration = (
-            dispatch_ts[carrier]
-            .sort_values(ascending=False)
-            .reset_index(drop=True)
-        )
+    # aggregate by carrier
+    balance_by_carrier = balance.groupby(level="carrier").sum()
+
+    # put time on x-axis
+    balance_by_carrier_t = balance_by_carrier.T
+
+    # drop carriers that are all NaN
+    balance_by_carrier_t = balance_by_carrier_t.dropna(axis=1, how="all")
+
+    # drop carriers that are zero everywhere
+    balance_by_carrier_t = balance_by_carrier_t.loc[
+        :, (balance_by_carrier_t.fillna(0).abs() > 0).any(axis=0)
+    ]
+
+    week = balance_by_carrier_t.loc[season_weeks[season]]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    week.plot.area(ax=ax, stacked=True)
+    ax.set_ylabel("Power / balance")
+    ax.grid(alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / f"balance_{season}_week.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_duration_curves(n: pypsa.Network, output_dir: Path) -> None:
+
+    balance = n.statistics.energy_balance(aggregate_time=False)
+
+    # group by carrier and put time on rows
+    balance_by_carrier = balance.groupby(level="carrier").sum().T
+    balance_by_carrier = balance_by_carrier.drop(columns=["electricity"], errors="ignore")
+
+    # clean up
+    balance_by_carrier = balance_by_carrier.dropna(axis=1, how="all")
+    balance_by_carrier = balance_by_carrier.loc[
+        :, (balance_by_carrier.fillna(0).abs() > 0).any(axis=0)
+    ]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    for carrier in balance_by_carrier.columns:
+        series = balance_by_carrier[carrier].dropna()
+
+        # sort descending to make a duration curve
+        duration = series[series > 0].sort_values(ascending=False).reset_index(drop=True)
+
         ax.plot(duration, label=carrier)
 
-    ax.set_title("Dispatch duration curves")
+    ax.set_title("Energy balance duration curves by carrier")
     ax.set_xlabel("Hour rank")
-    ax.set_ylabel("Dispatch [MW]")
+    ax.set_ylabel("Power [MW]")
     ax.grid(alpha=0.3)
     ax.legend()
+    plt.tight_layout()
+    plt.show()
 
     fig.tight_layout()
     fig.savefig(output_dir / "dispatch_duration_curves.png", dpi=300)
@@ -531,6 +635,7 @@ def main() -> None:
     # Built-in PyPSA statistics plots
     plot_optimal_capacities(n, output_dir)
     plot_annual_mix(n, bus_carrier, output_dir)
+    plot_annual_mix_from_balance(n, output_dir)
     plot_capacity_factors(n, bus_carrier, output_dir)
     plot_curtailment(n, bus_carrier, output_dir)
     
@@ -538,7 +643,9 @@ def main() -> None:
     # Seasonal dispatch and duration curves
     plot_dispatch_week(dispatch_ts, season_weeks["winter"], "winter", output_dir)
     plot_dispatch_week(dispatch_ts, season_weeks["summer"], "summer", output_dir)
-    plot_duration_curves(dispatch_ts, output_dir)
+    plot_balance_week(n, output_dir, "winter")
+    plot_balance_week(n, output_dir, "summer")
+    plot_duration_curves(n, output_dir)
 
     # Interannual installed capacity by weather year
     generator_capacity_path = Path("results/interannual_sensitivity/generator_capacity_by_year.csv")

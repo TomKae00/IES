@@ -9,7 +9,7 @@ import pypsa
 # CONFIG
 # =========================================================
 
-NETWORK_FILE = "results/dk_network_2016.nc"
+NETWORK_FILE = "results/regional_network_2016.nc"
 OUTPUT_DIR = "results/task1_analysis"
 
 # =========================================================

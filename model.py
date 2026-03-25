@@ -267,16 +267,16 @@ def add_carriers(n: pypsa.Network) -> None:
         PyPSA network.
     """
     carrier_data = {
-        "electricity": {"color": "#000000"},
-        "solar": {"color": "#ffd92f"},
-        "onwind": {"color": "#1b9e77"},
-        "offwind": {"color": "#377eb8"},
-        "gas": {"color": "#e41a1c"},
-        "coal": {"color": "#4d4d4d"},
-        "nuclear": {"color": "#984ea3"},
-        "battery": {"color": "#ff7f00"},
-        "battery charger": {"color": "#a65628"},
-        "battery discharger": {"color": "#f781bf"},
+        "electricity": {"color": "#4C566A"},
+        "solar": {"color": "#EBCB3B"},
+        "onwind": {"color": "#5AA469"},
+        "offwind": {"color": "#2E86AB"},
+        "gas": {"color": "#D08770"},
+        "coal": {"color": "#5C5C5C"},
+        "nuclear": {"color": "#8F6BB3"},
+        "battery": {"color": "#E67E22"},  # orange
+        "battery charger": {"color": "#C06C84"},  # dusty pink
+        "battery discharger": {"color": "#6C5B7B"},  # muted purple
     }
 
     for carrier, attrs in carrier_data.items():
@@ -623,14 +623,14 @@ if __name__ == "__main__":
     scenario_parameters = {
         "weather_year": "2016",
         "with_battery_storage": True,
-        "with_interconnectors": True,
-        "countries": ["DK", "DE", "SE", "NO"]
+        "with_interconnectors": False,
+        "countries": ["DK"] #, "DE", "SE", "NO"
     }
 
     file_paths = {
         "cost_file": f"cost_data/costs_{financial_parameters['year']}.csv",
         "timeseries_file": "Data/time_series_60min_singleindex_alldata.csv",
-        "output_file": "results/regional_network_2016.nc",
+        "output_file": "results/dk_base_battery_network_2016.nc",
     }
 
     cost_data = prepare_costs(

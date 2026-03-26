@@ -11,7 +11,7 @@ from interconnectors_analyze import load_network
 # CONFIG
 # =========================================================
 
-NETWORK_FILE = "results/regional_network_2016.nc"
+NETWORK_FILE = "results/dk_network_2016.nc"
 OUTPUT_DIR = "results/task1_analysis"
 
 # =========================================================
@@ -38,6 +38,21 @@ def get_single_bus_carrier(n: pypsa.Network) -> str:
         )
 
     return carriers[0]
+
+def get_carrier_colors(n: pypsa.Network, columns: pd.Index) -> list[str]:
+    """
+    Return colors for carriers based on n.carriers['color'].
+    """
+    fallback_color = "#999999"
+    colors = []
+
+    for carrier in columns:
+        if carrier in n.carriers.index and pd.notna(n.carriers.at[carrier, "color"]):
+            colors.append(n.carriers.at[carrier, "color"])
+        else:
+            colors.append(fallback_color)
+
+    return colors
 
 
 def get_representative_weeks(snapshots: pd.DatetimeIndex) -> dict[str, pd.DatetimeIndex]:
@@ -243,6 +258,7 @@ def plot_annual_mix(n: pypsa.Network, bus_carrier: str, output_dir: Path) -> Non
 
 
 def plot_annual_mix_from_balance(n: pypsa.Network, output_dir: Path) -> None:
+
     balance = n.statistics.energy_balance(aggregate_time=False)
 
     # group by carrier, with time on rows
@@ -271,13 +287,16 @@ def plot_annual_mix_from_balance(n: pypsa.Network, output_dir: Path) -> None:
 
     fig, ax = plt.subplots(figsize=(8, 8))
 
+    colors = get_carrier_colors(n, annual_mix.index)
+
     wedges, texts, autotexts = ax.pie(
         annual_mix,
+        colors=colors,
         labels=None,
         autopct="%1.1f%%",
         startangle=90,
         wedgeprops={"edgecolor": "white"},
-        textprops={"color": "black"},
+        textprops={"color": "black"},    
     )
 
     ax.legend(
@@ -355,6 +374,7 @@ def plot_balance_week(n: pypsa.Network, output_dir: Path, season: str) -> None:
     Plot the balance for a specific week.
     """
     season_weeks = get_representative_weeks(n.snapshots)
+
     balance = n.statistics.energy_balance(aggregate_time=False)
 
     # aggregate by carrier
@@ -373,8 +393,10 @@ def plot_balance_week(n: pypsa.Network, output_dir: Path, season: str) -> None:
 
     week = balance_by_carrier_t.loc[season_weeks[season]]
 
+    colors = get_carrier_colors(n, week.columns)
+
     fig, ax = plt.subplots(figsize=(12, 6))
-    week.plot.area(ax=ax, stacked=True)
+    week.plot.area(ax=ax, stacked=True, color=colors)
     ax.set_ylabel("Power / balance")
     ax.grid(alpha=0.3)
 
@@ -384,6 +406,7 @@ def plot_balance_week(n: pypsa.Network, output_dir: Path, season: str) -> None:
 
 
 def plot_duration_curves(n: pypsa.Network, output_dir: Path) -> None:
+
 
     balance = n.statistics.energy_balance(aggregate_time=False)
 
@@ -401,11 +424,11 @@ def plot_duration_curves(n: pypsa.Network, output_dir: Path) -> None:
 
     for carrier in balance_by_carrier.columns:
         series = balance_by_carrier[carrier].dropna()
-
-        # sort descending to make a duration curve
         duration = series[series > 0].sort_values(ascending=False).reset_index(drop=True)
 
-        ax.plot(duration, label=carrier)
+        color = get_carrier_colors(n, pd.Index([carrier]))[0]
+
+        ax.plot(duration, label=carrier, color=color)
 
     ax.set_title("Energy balance duration curves by carrier")
     ax.set_xlabel("Hour rank")

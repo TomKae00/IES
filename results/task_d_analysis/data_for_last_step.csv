@@ -1,0 +1,12 @@
+Type,Name,bus0,bus1,Generation [MW],Demand [MW],Imbalance [MW],Flow p0 [MW]
+bus,DK,,,1746.0097690731927,3028.24,-1282.230230926807,
+bus,DE,,,45641.0,40126.0,5515.0,
+bus,SE,,,17635.230230926805,15191.0,2444.2302309268052,
+bus,NO,,,8451.76,15128.76,-6677.0,
+bus,DK_battery,,,0.0,0.0,0.0,
+line,DK_NO,DK,NO,,,,1632.0
+line,DK_SE,DK,SE,,,,585.769769073193
+line,DK_DE,DK,DE,,,,-3500.0
+line,DE_SE,DE,SE,,,,615.0
+line,NO_SE,NO,SE,,,,-3645.0
+line,DE_NO,DE,NO,,,,1400.0

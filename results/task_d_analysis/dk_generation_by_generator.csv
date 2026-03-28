@@ -1,0 +1,7 @@
+Generator,Carrier,Optimized capacity [MW],Annual generation [GWh]
+DK_solar,solar,17004.5113587866,22859.418848017165
+DK_onshore_wind,onwind,0.0,0.0
+DK_offshore_wind,offwind,4391.690741067231,14996.556292787482
+DK_CCGT,gas,2509.4177418466825,12609.975140164017
+DK_coal,coal,0.0,0.0
+DK_nuclear,nuclear,0.0,0.0

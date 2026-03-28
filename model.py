@@ -456,10 +456,12 @@ def attach_interconnectors_dk_region(n: pypsa.Network) -> None:
     400 kV HVAC lines with x = 0.1 according to the assignment.
     """
     line_data = [
-        ("DK", "NO", "DK_NO", 1700.0),
-        ("DK", "SE", "DK_SE", 715.0),
-        ("DK", "DE", "DK_DE", 1000.0),
-        ("DE", "SE", "DE_SE", 600.0),
+        ("DK", "NO", "DK_NO", 1632.0),
+        ("DK", "SE", "DK_SE", 2415.0),
+        ("DK", "DE", "DK_DE", 3500.0),
+        ("DE", "SE", "DE_SE", 615.0),
+        ("NO", "SE", "NO_SE", 3645.0),
+        ("DE", "NO", "DE_NO", 1400.0),
     ]
 
     for bus0, bus1, name, capacity in line_data:

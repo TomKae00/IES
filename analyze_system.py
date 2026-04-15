@@ -1,3 +1,4 @@
+from calendar import week
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -405,6 +406,75 @@ def plot_balance_week(n: pypsa.Network, output_dir: Path, season: str) -> None:
     plt.close(fig)
 
 
+
+def plot_balance_week2(n: pypsa.Network, output_dir: Path, season: str) -> None:
+    """
+    Plot the system balance for a representative week, with electricity demand
+    shown as a positive line.
+    """
+    season_weeks = get_representative_weeks(n.snapshots)
+
+    balance = n.statistics.energy_balance(aggregate_time=False)
+
+    # Aggregate by carrier
+    balance_by_carrier = balance.groupby(level="carrier").sum()
+
+    # Put time on x-axis
+    balance_by_carrier_t = balance_by_carrier.T
+
+    # Drop carriers that are all NaN
+    balance_by_carrier_t = balance_by_carrier_t.dropna(axis=1, how="all")
+
+    # Drop carriers that are zero everywhere
+    balance_by_carrier_t = balance_by_carrier_t.loc[
+        :, (balance_by_carrier_t.fillna(0).abs() > 0).any(axis=0)
+    ]
+
+    # Select representative week
+    week = balance_by_carrier_t.loc[season_weeks[season]].copy()
+
+    # Electricity demand as positive line
+    # Assumes electricity loads are attached to electricity buses
+    elec_loads = n.loads.index[n.loads.bus.map(n.buses.carrier) == "electricity"]
+    demand = n.loads_t.p_set[elec_loads].sum(axis=1).loc[season_weeks[season]]
+
+    relevant = ["gas", "offwind", "solar"]
+    week = week[relevant] if all(col in week.columns for col in relevant) else pd.DataFrame()
+
+    # Colors
+    colors = get_carrier_colors(n, week.columns)
+
+    # Styling
+    plt.rcParams.update({
+        "font.size": 13,
+        "axes.titlesize": 16,
+        "axes.labelsize": 16,
+        "legend.fontsize": 16,
+        "xtick.labelsize": 16,
+        "ytick.labelsize": 16,
+    })
+
+    fig, ax = plt.subplots(figsize=(13, 6))
+
+    # Positive and negative stacked areas
+    week.plot.area(ax=ax, stacked=True, color=colors)
+
+    # Demand line
+    demand.plot(ax=ax, color="black", linewidth=2, label="electricity demand")
+
+    ax.set_ylabel("Power [MW]")
+    ax.set_xlabel("")
+    ax.set_ylim(bottom=0)
+    ax.grid(axis="y", alpha=0.3)
+
+    # Put legend outside
+    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False, title="")
+
+    fig.tight_layout()
+    fig.savefig(output_dir / f"balance_{season}_week.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_duration_curves(n: pypsa.Network, output_dir: Path) -> None:
 
 
@@ -596,6 +666,50 @@ def plot_installed_capacity_by_generator(df: pd.DataFrame, output_path: str | No
     plt.show()
     plt.close(fig)
 
+def plot_capacity_factors_over_year(n: pypsa.Network, bus_carrier: str, output_dir: Path) -> None:
+    # Select generators at the given bus carrier
+    gens = n.generators.index[n.generators.bus.map(n.buses.carrier) == bus_carrier]
+
+    # Time series and capacities
+    p = n.generators_t.p[gens]
+    p_nom = n.generators.loc[gens, "p_nom_opt"]
+    weights = n.snapshot_weightings.generators
+
+    # Weighted generation
+    generation = p.multiply(weights, axis=0)
+
+    # 🔧 FIX: group by carrier (no axis=1)
+    generation = generation.T.groupby(n.generators.loc[gens, "carrier"]).sum().T
+
+    # Aggregate capacities by carrier
+    capacities = p_nom.groupby(n.generators.loc[gens, "carrier"]).sum()
+
+    # Aggregate over time (weekly or monthly)
+    generation = generation.resample("ME").sum()
+    hours = weights.resample("ME").sum()
+
+    # Capacity factor
+    cf = generation.divide(hours, axis=0)
+    cf = cf.divide(capacities, axis=1)
+
+    relevant = ["gas", "offwind", "solar"]
+    cf = cf[relevant]   
+
+    colors = get_carrier_colors(n, cf.columns)
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(8, 4))
+    cf.plot(ax=ax, color=colors)
+
+    ax.set_ylabel("Capacity factor [-]")
+    ax.set_xlabel("")
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend(loc="center left", bbox_to_anchor=(1, 0.5), title="")
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "capacity_factors_over_year.png", dpi=300)
+    plt.close(fig)
+
 # Example usage:
 # plot_installed_capacity_by_generator(df, output_path="installed_capacity_by_generator.png")
 
@@ -661,13 +775,14 @@ def main() -> None:
     plot_annual_mix_from_balance(n, output_dir)
     plot_capacity_factors(n, bus_carrier, output_dir)
     plot_curtailment(n, bus_carrier, output_dir)
+    plot_capacity_factors_over_year(n, bus_carrier, output_dir)
     
 
     # Seasonal dispatch and duration curves
     plot_dispatch_week(dispatch_ts, season_weeks["winter"], "winter", output_dir)
     plot_dispatch_week(dispatch_ts, season_weeks["summer"], "summer", output_dir)
-    plot_balance_week(n, output_dir, "winter")
-    plot_balance_week(n, output_dir, "summer")
+    plot_balance_week2(n, output_dir, "winter")
+    plot_balance_week2(n, output_dir, "summer")
     plot_duration_curves(n, output_dir)
 
     # Interannual installed capacity by weather year

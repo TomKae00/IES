@@ -180,10 +180,12 @@ def load_country_timeseries(
 def calculate_conventional_marginal_cost(
     cost_data: pd.DataFrame,
     technology: str,
-    co2_price: float,
+    co2_price: float = 0.0,
 ) -> float:
     """
     Calculate the marginal cost of a conventional generator in EUR/MWh_el.
+    
+    Includes CO2 cost if co2_price > 0.
 
     Parameters
     ----------
@@ -191,8 +193,8 @@ def calculate_conventional_marginal_cost(
         Prepared technology cost table.
     technology : str
         Generator technology, e.g. "CCGT", "coal", or "nuclear".
-    co2_price : float
-        CO2 price in EUR/tCO2.
+    co2_price : float, optional
+        CO2 price in EUR/tCO2. Default is 0.0 (no CO2 cost).
 
     Returns
     -------
@@ -257,26 +259,40 @@ def attach_country_bus_and_load(
     )
 
 
-def add_carriers(n: pypsa.Network) -> None:
+def add_carriers(n: pypsa.Network, cost_data: pd.DataFrame = None) -> None:
     """
     Add carriers used in the system and define plotting colors.
+    
+    For gas and coal carriers, also set co2_emissions attribute (tCO2/MWh_th).
 
     Parameters
     ----------
     n : pypsa.Network
         PyPSA network.
+    cost_data : pd.DataFrame, optional
+        Technology cost data containing CO2 intensity values.
     """
+    # Get CO2 intensities from cost data if available
+    gas_co2 = 0.0
+    coal_co2 = 0.0
+    
+    if cost_data is not None and "CO2 intensity" in cost_data.columns:
+        if "gas" in cost_data.index:
+            gas_co2 = cost_data.at["gas", "CO2 intensity"]
+        if "coal" in cost_data.index:
+            coal_co2 = cost_data.at["coal", "CO2 intensity"]
+    
     carrier_data = {
-        "electricity": {"color": "#4C566A"},
-        "solar": {"color": "#EBCB3B"},
-        "onwind": {"color": "#5AA469"},
-        "offwind": {"color": "#2E86AB"},
-        "gas": {"color": "#D08770"},
-        "coal": {"color": "#5C5C5C"},
-        "nuclear": {"color": "#8F6BB3"},
-        "battery": {"color": "#E67E22"},  # orange
-        "battery charger": {"color": "#C06C84"},  # dusty pink
-        "battery discharger": {"color": "#6C5B7B"},  # muted purple
+        "electricity": {"color": "#4C566A", "co2_emissions": 0.0},
+        "solar": {"color": "#EBCB3B", "co2_emissions": 0.0},
+        "onwind": {"color": "#5AA469", "co2_emissions": 0.0},
+        "offwind": {"color": "#2E86AB", "co2_emissions": 0.0},
+        "gas": {"color": "#D08770", "co2_emissions": gas_co2},
+        "coal": {"color": "#5C5C5C", "co2_emissions": coal_co2},
+        "nuclear": {"color": "#8F6BB3", "co2_emissions": 0.0},
+        "battery": {"color": "#E67E22", "co2_emissions": 0.0},
+        "battery charger": {"color": "#C06C84", "co2_emissions": 0.0},
+        "battery discharger": {"color": "#6C5B7B", "co2_emissions": 0.0},
     }
 
     for carrier, attrs in carrier_data.items():
@@ -286,6 +302,10 @@ def add_carriers(n: pypsa.Network) -> None:
                 carrier,
                 **attrs,
             )
+        else:
+            # Update co2_emissions for existing carriers
+            if "co2_emissions" in attrs:
+                n.carriers.at[carrier, "co2_emissions"] = attrs["co2_emissions"]
 
 
 def attach_renewable_generators(
@@ -348,7 +368,7 @@ def attach_conventional_generators(
     n: pypsa.Network,
     country_code: str,
     cost_data: pd.DataFrame,
-    co2_price: float,
+    co2_price: float = 0.0,
 ) -> None:
     """
     Attach stylized conventional generators to one country node.
@@ -361,8 +381,8 @@ def attach_conventional_generators(
         Country code, e.g. "DK", "DE", "SE", "NO".
     cost_data : pd.DataFrame
         Prepared technology cost table.
-    co2_price : float
-        CO2 price in EUR/tCO2.
+    co2_price : float, optional
+        CO2 price in EUR/tCO2. Default is 0.0 (no CO2 cost).
     """
     bus_name = f"{country_code}"
 
@@ -489,9 +509,9 @@ def attach_interconnectors_dk_region(n: pypsa.Network) -> None:
 def create_regional_network(
     cost_data: pd.DataFrame,
     all_timeseries_data: dict,
-    co2_price: float,
     with_battery_storage: bool,
     with_interconnectors: bool,
+    co2_price: float = 0.0,
 ) -> pypsa.Network:
     """
     Create a regional PyPSA network with Denmark and neighbouring countries.
@@ -502,10 +522,12 @@ def create_regional_network(
         Prepared technology cost table.
     all_timeseries_data : dict
         Dictionary mapping country codes to their time series data.
-    co2_price : float
-        CO2 price in EUR/tCO2.
     with_battery_storage : bool
         Whether to include battery storage for Denmark.
+    with_interconnectors : bool
+        Whether to include interconnectors.
+    co2_price : float, optional
+        CO2 price in EUR/tCO2. Default is 0.0 (no CO2 cost).
 
     Returns
     -------
@@ -517,7 +539,7 @@ def create_regional_network(
     reference_country = list(all_timeseries_data.keys())[0]
     n.set_snapshots(all_timeseries_data[reference_country]["load"].index)
 
-    add_carriers(n)
+    add_carriers(n, cost_data=cost_data)
 
     for country_code, timeseries_data in all_timeseries_data.items():
         attach_country_bus_and_load(
@@ -552,9 +574,11 @@ def create_regional_network(
     return n
 
 
-def custom_constraints(n: pypsa.Network, sns) -> None:
+def apply_battery_ratio_constraint(n: pypsa.Network, sns) -> None:
     """
-    Add custom optimisation constraints to the PyPSA model.
+    Add constraint: charger and discharger power capacities must be equal.
+    
+    This ensures the battery can charge and discharge at the same rate.
 
     Parameters
     ----------
@@ -574,17 +598,16 @@ def custom_constraints(n: pypsa.Network, sns) -> None:
 
     charger_p_nom = n.model["Link-p_nom"].loc[charger_links]
     discharger_p_nom = n.model["Link-p_nom"].loc[discharger_links]
-
     discharger_efficiency = n.links.loc[discharger_links, "efficiency"].values
 
     lhs = charger_p_nom - discharger_p_nom * discharger_efficiency
-
     n.model.add_constraints(lhs == 0, name="Link-battery_charger_ratio")
 
 
 def optimize_and_save_network(
     n: pypsa.Network,
     output_file: str,
+    co2_limit_mt: float = None,
 ) -> None:
     """
     Optimize the PyPSA network with Gurobi and save it as a NetCDF file.
@@ -595,15 +618,29 @@ def optimize_and_save_network(
         PyPSA network to optimize.
     output_file : str
         Path to the output .nc file.
+    co2_limit_mt : float, optional
+        CO2 emission limit in Mt CO2 per year. If None, no CO2 constraint is applied.
+        Uses PyPSA's GlobalConstraint feature.
     """
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Add CO2 global constraint if specified
+    if co2_limit_mt is not None:
+        n.add(
+            "GlobalConstraint",
+            "co2_limit",
+            type="primary_energy",
+            carrier_attribute="co2_emissions",
+            sense="<=",
+            constant=co2_limit_mt * 1e6,  # Convert Mt to tCO2
+        )
 
     solver_options = {}
 
     n.optimize(
         n.snapshots,
-        extra_functionality=custom_constraints,
+        extra_functionality=apply_battery_ratio_constraint,
         solver_name="gurobi",
         solver_options=solver_options,
     )
@@ -619,20 +656,18 @@ if __name__ == "__main__":
         "r": 0.07,
         "nyears": 1,
         "year": 2025,
-        "co2_price": 80.0,
     }
 
     scenario_parameters = {
         "weather_year": "2016",
         "with_battery_storage": True,
         "with_interconnectors": False,
-        "countries": ["DK"] #, "DE", "SE", "NO"
+        "countries": ["DK"]
     }
 
     file_paths = {
         "cost_file": f"cost_data/costs_{financial_parameters['year']}.csv",
         "timeseries_file": "Data/time_series_60min_singleindex_alldata.csv",
-        "output_file": "results/dk_base_battery_network_2016.nc",
     }
 
     cost_data = prepare_costs(
@@ -653,51 +688,16 @@ if __name__ == "__main__":
     n = create_regional_network(
         cost_data=cost_data,
         all_timeseries_data=all_timeseries_data,
-        co2_price=financial_parameters["co2_price"],
         with_battery_storage=scenario_parameters["with_battery_storage"],
         with_interconnectors=scenario_parameters["with_interconnectors"],
+        co2_price=0.0,
     )
 
-    print("\nBUSES")
-    print(n.buses.dtypes)
+    print("\nBASIC NETWORK INFO")
+    print(f"Buses: {len(n.buses)}")
+    print(f"Generators: {len(n.generators)}")
+    print(f"Loads: {len(n.loads)}")
+    print(f"Snapshots: {len(n.snapshots)}")
 
-    print("\nGENERATORS")
-    print(n.generators.dtypes)
-
-    print("\nLOADS")
-    print(n.loads.dtypes)
-
-    print("\nSTORES")
-    print(n.stores.dtypes)
-
-    print("\nLINKS")
-    print(n.links.dtypes)
-
-    print("\nLINES")
-    print(n.lines.dtypes)
-
-    print("\nINDEX DTYPES")
-    print("buses index:", n.buses.index.dtype)
-    print("generators index:", n.generators.index.dtype)
-    print("loads index:", n.loads.index.dtype)
-    print("stores index:", n.stores.index.dtype)
-    print("links index:", n.links.index.dtype)
-    print("lines index:", n.lines.index.dtype)
-
-    optimize_and_save_network(
-        n=n,
-        output_file=file_paths["output_file"],
-    )
-
-    print("\nOptimized generator capacities [MW]:")
-    print(n.generators.p_nom_opt)
-
-    if scenario_parameters["with_battery_storage"]:
-        print("\nOptimized battery energy capacity [MWh]:")
-        print(n.stores.e_nom_opt)
-
-        print("\nOptimized battery power capacities [MW]:")
-        print(n.links.p_nom_opt)
-
-    print("\nObjective value:")
-    print(n.objective)
+    print("\nCarrier CO2 emissions:")
+    print(n.carriers[["co2_emissions"]])

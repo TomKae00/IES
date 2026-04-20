@@ -153,7 +153,7 @@ def run_co2_sensitivity_analysis(
         Results table with all scenario data.
     """
     if co2_cap_fractions is None:
-        co2_cap_fractions = [1.0, 0.8,0.5, 0.6, 0.4, 0.2, 0.1]
+        co2_cap_fractions = [1.0, 0.8, 0.5, 0.3, 0.2, 0.1]
     
     print("\n" + "=" * 80)
     print("CO2 SENSITIVITY ANALYSIS")

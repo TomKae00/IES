@@ -613,91 +613,143 @@ def optimize_and_save_network(
     print(f"Optimized network saved to: {output_path}")
 
 
-if __name__ == "__main__":
-    financial_parameters = {
-        "fill_values": 0.0,
-        "r": 0.07,
-        "nyears": 1,
-        "year": 2025,
-        "co2_price": 80.0,
-    }
+PIPELINE_REFERENCE = {
+    "CH4": {
+        "p_nom_mw": 13700.0,
+        "efficiency": 0.98,
+        "marginal_cost": 1.5,
+        "carrier": "CH4",
+    },
+    "H2": {
+        "p_nom_mw": 13000.0,
+        "efficiency": 0.96,
+        "marginal_cost": 3.0,
+        "carrier": "H2",
+    },
+}
 
-    scenario_parameters = {
-        "weather_year": "2016",
-        "with_battery_storage": True,
-        "with_interconnectors": False,
-        "countries": ["DK"] #, "DE", "SE", "NO"
-    }
+PIPELINE_TOPOLOGY = [
+    ("DK", "NO"),
+    ("DK", "SE"),
+    ("DK", "DE"),
+    ("DE", "SE"),
+    ("NO", "SE"),
+    ("DE", "NO"),
+]
 
-    file_paths = {
-        "cost_file": f"cost_data/costs_{financial_parameters['year']}.csv",
-        "timeseries_file": "Data/time_series_60min_singleindex_alldata.csv",
-        "output_file": "results/dk_base_battery_network_2016.nc",
-    }
 
-    cost_data = prepare_costs(
-        cost_file=file_paths["cost_file"],
-        financial_parameters=financial_parameters,
-        number_of_years=financial_parameters["nyears"],
-    )
+def add_gas_pipeline(
+    n: pypsa.Network,
+    pipeline_type: str,
+) -> list[str]:
+    pipeline = PIPELINE_REFERENCE[pipeline_type]
+    carrier_name = pipeline["carrier"]
+    if carrier_name not in n.carriers.index:
+        n.add("Carrier", carrier_name)
 
-    all_timeseries_data = {}
-
-    for country_code in scenario_parameters["countries"]:
-        all_timeseries_data[country_code] = load_country_timeseries(
-            timeseries_file=file_paths["timeseries_file"],
-            country_code=country_code,
-            year=scenario_parameters["weather_year"],
+    link_names = []
+    for bus0, bus1 in PIPELINE_TOPOLOGY:
+        name = f"{pipeline_type}_pipeline_{bus0}_{bus1}"
+        n.add(
+            "Link",
+            name,
+            bus0=bus0,
+            bus1=bus1,
+            p_nom=pipeline["p_nom_mw"],
+            p_nom_extendable=False,
+            efficiency=pipeline["efficiency"],
+            carrier=carrier_name,
+            marginal_cost=pipeline["marginal_cost"],
         )
+        link_names.append(name)
+    return link_names
 
-    n = create_regional_network(
-        cost_data=cost_data,
-        all_timeseries_data=all_timeseries_data,
-        co2_price=financial_parameters["co2_price"],
-        with_battery_storage=scenario_parameters["with_battery_storage"],
-        with_interconnectors=scenario_parameters["with_interconnectors"],
-    )
 
-    print("\nBUSES")
-    print(n.buses.dtypes)
+# if __name__ == "__main__":
+#     financial_parameters = {
+#         "fill_values": 0.0,
+#         "r": 0.07,
+#         "nyears": 1,
+#         "year": 2025,
+#         "co2_price": 80.0,
+#     }
 
-    print("\nGENERATORS")
-    print(n.generators.dtypes)
+#     scenario_parameters = {
+#         "weather_year": "2016",
+#         "with_battery_storage": True,
+#         "with_interconnectors": False,
+#         "countries": ["DK"] #, "DE", "SE", "NO"
+#     }
 
-    print("\nLOADS")
-    print(n.loads.dtypes)
+#     file_paths = {
+#         "cost_file": f"cost_data/costs_{financial_parameters['year']}.csv",
+#         "timeseries_file": "Data/time_series_60min_singleindex_alldata.csv",
+#         "output_file": "results/dk_base_battery_network_2016.nc",
+#     }
 
-    print("\nSTORES")
-    print(n.stores.dtypes)
+#     cost_data = prepare_costs(
+#         cost_file=file_paths["cost_file"],
+#         financial_parameters=financial_parameters,
+#         number_of_years=financial_parameters["nyears"],
+#     )
 
-    print("\nLINKS")
-    print(n.links.dtypes)
+#     all_timeseries_data = {}
 
-    print("\nLINES")
-    print(n.lines.dtypes)
+#     for country_code in scenario_parameters["countries"]:
+#         all_timeseries_data[country_code] = load_country_timeseries(
+#             timeseries_file=file_paths["timeseries_file"],
+#             country_code=country_code,
+#             year=scenario_parameters["weather_year"],
+#         )
 
-    print("\nINDEX DTYPES")
-    print("buses index:", n.buses.index.dtype)
-    print("generators index:", n.generators.index.dtype)
-    print("loads index:", n.loads.index.dtype)
-    print("stores index:", n.stores.index.dtype)
-    print("links index:", n.links.index.dtype)
-    print("lines index:", n.lines.index.dtype)
+#     n = create_regional_network(
+#         cost_data=cost_data,
+#         all_timeseries_data=all_timeseries_data,
+#         co2_price=financial_parameters["co2_price"],
+#         with_battery_storage=scenario_parameters["with_battery_storage"],
+#         with_interconnectors=scenario_parameters["with_interconnectors"],
+#     )
 
-    optimize_and_save_network(
-        n=n,
-        output_file=file_paths["output_file"],
-    )
+#     print("\nBUSES")
+#     print(n.buses.dtypes)
 
-    print("\nOptimized generator capacities [MW]:")
-    print(n.generators.p_nom_opt)
+#     print("\nGENERATORS")
+#     print(n.generators.dtypes)
 
-    if scenario_parameters["with_battery_storage"]:
-        print("\nOptimized battery energy capacity [MWh]:")
-        print(n.stores.e_nom_opt)
+#     print("\nLOADS")
+#     print(n.loads.dtypes)
 
-        print("\nOptimized battery power capacities [MW]:")
-        print(n.links.p_nom_opt)
+#     print("\nSTORES")
+#     print(n.stores.dtypes)
+
+#     print("\nLINKS")
+#     print(n.links.dtypes)
+
+#     print("\nLINES")
+#     print(n.lines.dtypes)
+
+#     print("\nINDEX DTYPES")
+#     print("buses index:", n.buses.index.dtype)
+#     print("generators index:", n.generators.index.dtype)
+#     print("loads index:", n.loads.index.dtype)
+#         print("stores index:", n.stores.index.dtype)
+#         print("links index:", n.links.index.dtype)
+#         print("lines index:", n.lines.index.dtype)
+
+#     optimize_and_save_network(
+#         n=n,
+#         output_file=file_paths["output_file"],
+#     )
+
+#     print("\nOptimized generator capacities [MW]:")
+#     print(n.generators.p_nom_opt)
+
+#     if scenario_parameters["with_battery_storage"]:
+#         print("\nOptimized battery energy capacity [MWh]:")
+#         print(n.stores.e_nom_opt)
+
+#         print("\nOptimized battery power capacities [MW]:")
+#         print(n.links.p_nom_opt)
 
     print("\nObjective value:")
     print(n.objective)

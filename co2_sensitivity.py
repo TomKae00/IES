@@ -22,6 +22,8 @@ from model import (
     prepare_costs,
     load_country_timeseries,
     create_regional_network,
+    apply_battery_ratio_constraint,
+    calculate_conventional_marginal_cost,
 )
 
 
@@ -91,6 +93,53 @@ def calculate_network_emissions(n: pypsa.Network) -> float:
     return total_emissions_tco2 / 1e6  # Convert tCO2 to Mt CO2
 
 
+def plot_weekly_dispatch(n: pypsa.Network, week_start: str = '2016-01-01', title: str = 'Weekly Dispatch', output_dir: Path = None):
+    """
+    Plot the dispatch for the first week.
+    
+    Parameters
+    ----------
+    n : pypsa.Network
+        Optimized network.
+    week_start : str
+        Start date of the week.
+    title : str
+        Plot title.
+    output_dir : Path, optional
+        Directory to save the plot.
+    """
+    week_end = pd.to_datetime(week_start) + pd.Timedelta(days=7)
+    week_snapshots = n.snapshots[(n.snapshots >= week_start) & (n.snapshots < week_end)]
+    
+    # Select key generators in stacking order (nuclear at bottom)
+    stacking_order = ['nuclear', 'coal', 'CCGT', 'solar', 'onshore_wind', 'offshore_wind']
+    key_gens = []
+    for tech in stacking_order:
+        matching_gens = [gen for gen in n.generators.index if tech in gen]
+        key_gens.extend(matching_gens)
+    
+    if not key_gens:
+        return
+    
+    dispatch_data = n.generators_t.p.loc[week_snapshots, key_gens]
+    
+    fig, ax = plt.subplots(figsize=(12, 4))
+    dispatch_data.plot.area(ax=ax, stacked=True, linewidth=0)
+    ax.set_title(title)
+    ax.set_ylabel("Dispatch [MW]")
+    ax.set_xlabel("")
+    ax.legend(title="Technology", ncol=3, fontsize=9)
+    ax.grid(alpha=0.3)
+    
+    plt.tight_layout()
+    if output_dir:
+        filename = title.replace(' ', '_').replace('%', 'pct').replace('.', '') + '.png'
+        fig.savefig(output_dir / filename, dpi=200, bbox_inches="tight")
+        print(f"Saved dispatch plot to {output_dir / filename}")
+    plt.show()
+    plt.close(fig)
+
+
 def get_generation_by_carrier(n: pypsa.Network) -> dict:
     """
     Get total annual generation by carrier type.
@@ -111,16 +160,56 @@ def get_generation_by_carrier(n: pypsa.Network) -> dict:
         carrier = n.generators.at[gen, "carrier"]
         if gen in n.generators_t.p.columns:
             gen_mwh = n.generators_t.p[gen].sum()
-            if carrier not in generation:
-                generation[carrier] = 0.0
-            generation[carrier] += gen_mwh
+            generation[carrier] = generation.get(carrier, 0.0) + gen_mwh
     
     # Fill in missing carriers with zero
     for carrier in n.carriers.index:
-        if carrier not in generation:
-            generation[carrier] = 0.0
+        generation.setdefault(carrier, 0.0)
     
     return generation
+
+
+def optimize_network(n: pypsa.Network) -> None:
+    """
+    Optimize a network with the battery ratio constraint applied.
+    """
+    n.optimize(
+        n.snapshots,
+        solver_name="gurobi",
+        extra_functionality=apply_battery_ratio_constraint,
+    )
+
+
+def build_result_entry(
+    n: pypsa.Network,
+    co2_cap_fraction: float,
+    co2_cap_mt: float,
+    actual_emissions_mt: float,
+) -> dict:
+    """
+    Build a result dictionary from an optimized network.
+    """
+    result = {
+        "co2_cap_fraction": co2_cap_fraction,
+        "co2_cap_mt": co2_cap_mt,
+        "system_cost_eur": n.objective,
+        "actual_emissions_mt": actual_emissions_mt,
+    }
+
+    for gen in n.generators.index:
+        result[f"capacity_{gen}"] = n.generators.at[gen, "p_nom_opt"]
+
+    if "DK_battery_store" in n.stores.index:
+        result["battery_energy_mwh"] = n.stores.at["DK_battery_store", "e_nom_opt"]
+    if "DK_battery_charger" in n.links.index:
+        result["battery_charger_mw"] = n.links.at["DK_battery_charger", "p_nom_opt"]
+    if "DK_battery_discharger" in n.links.index:
+        result["battery_discharger_mw"] = n.links.at["DK_battery_discharger", "p_nom_opt"]
+
+    for carrier, gen_mwh in get_generation_by_carrier(n).items():
+        result[f"generation_{carrier}"] = gen_mwh
+
+    return result
 
 
 def run_co2_sensitivity_analysis(
@@ -129,7 +218,16 @@ def run_co2_sensitivity_analysis(
     financial_parameters: dict,
     scenario_parameters: dict,
     co2_cap_fractions: list = None,
-) -> pd.DataFrame:
+    co2_price: float = 0.0,
+) -> tuple[pd.DataFrame, pd.DataFrame, pypsa.Network]:
+    """
+    Run sensitivity analysis across multiple CO2 cap scenarios.
+    
+    Returns
+    -------
+    tuple
+        Results DataFrame, cost_data DataFrame, baseline network.
+    """
     """
     Run sensitivity analysis across multiple CO2 cap scenarios.
     
@@ -149,11 +247,11 @@ def run_co2_sensitivity_analysis(
     
     Returns
     -------
-    pd.DataFrame
-        Results table with all scenario data.
+    tuple
+        Results DataFrame, cost_data DataFrame, baseline network.
     """
     if co2_cap_fractions is None:
-        co2_cap_fractions = [1.0, 0.8, 0.5, 0.3, 0.2, 0.1]
+        co2_cap_fractions = [0.8, 0.5, 0.3, 0.2, 0.1]
     
     print("\n" + "=" * 80)
     print("CO2 SENSITIVITY ANALYSIS")
@@ -165,6 +263,10 @@ def run_co2_sensitivity_analysis(
         financial_parameters=financial_parameters,
         number_of_years=financial_parameters["nyears"],
     )
+    
+    # Print generator cost table in table that goes into results
+
+    
     
     all_timeseries_data = {}
     for country_code in scenario_parameters["countries"]:
@@ -186,7 +288,7 @@ def run_co2_sensitivity_analysis(
         all_timeseries_data=all_timeseries_data,
         with_battery_storage=scenario_parameters.get("with_battery_storage", True),
         with_interconnectors=scenario_parameters.get("with_interconnectors", False),
-        co2_price=0.0,
+        co2_price=co2_price,
     )
     
     # Optimize without CO2 constraint
@@ -200,6 +302,13 @@ def run_co2_sensitivity_analysis(
     print(f"Baseline annual emissions: {baseline_emissions:.3f} Mt CO2")
     print(f"Carrier CO2 intensities (tCO2/MWh_th):")
     print(n_baseline.carriers[["co2_emissions"]])
+    
+    # Print capacity shares
+    
+    
+    # Print weekly dispatch for baseline
+    
+    plot_weekly_dispatch(n_baseline, title='Baseline Weekly Dispatch', output_dir=Path("results/co2_sensitivity"))
     
     # Store baseline result
     gen_by_carrier = get_generation_by_carrier(n_baseline)
@@ -244,7 +353,7 @@ def run_co2_sensitivity_analysis(
             all_timeseries_data=all_timeseries_data,
             with_battery_storage=scenario_parameters.get("with_battery_storage", True),
             with_interconnectors=scenario_parameters.get("with_interconnectors", False),
-            co2_price=0.0,
+            co2_price=co2_price,
         )
         
         # Add global CO2 constraint
@@ -300,8 +409,15 @@ def run_co2_sensitivity_analysis(
             result[f"generation_{carrier}"] = gen_mwh
         
         results.append(result)
+        
+        # Print dispatch for the strictest CO2 cap scenario
+        if i == len(co2_cap_fractions) - 1:
+            print(f"\nDispatch for strictest CO2 cap scenario ({fraction:.1%}):")
+            
+        
+            plot_weekly_dispatch(n_scenario, title=f'Weekly Dispatch for {fraction:.1%} CO2 Cap', output_dir=Path("results/co2_sensitivity"))
     
-    return pd.DataFrame(results)
+    return pd.DataFrame(results), cost_data, n_baseline
 
 
 def plot_co2_sensitivity(results_df: pd.DataFrame, output_dir: Path) -> None:
@@ -389,12 +505,12 @@ def plot_co2_sensitivity(results_df: pd.DataFrame, output_dir: Path) -> None:
     
     # Plot key generator capacities
     capacity_cols = [col for col in plot_df.columns if col.startswith("capacity_") and any(
-        tech in col for tech in ["CCGT", "coal", "solar", "wind"]
+        tech in col for tech in ["CCGT", "coal", "solar", "wind", "battery", "nuclear"]
     )]
     
     for col in sorted(capacity_cols):
         gen_name = col.replace("capacity_", "")
-        if any(x in gen_name for x in ["CCGT", "coal", "solar", "wind"]):
+        if any(x in gen_name for x in ["CCGT", "coal", "solar", "wind", "battery", "nuclear"]):
             ax.plot(plot_df["co2_cap_mt"], plot_df[col], marker="o", label=gen_name, linewidth=2)
     
     ax.set_xlabel("CO2 Cap [Mt CO2/year]")
@@ -412,11 +528,12 @@ def main() -> None:
     """Main execution."""
     
     financial_parameters = {
-        "fill_values": 0.0,
-        "r": 0.07,
-        "nyears": 1,
-        "year": 2025,
-    }
+    "fill_values": 0.0,
+    "r": 0.07,
+    "nyears": 1,
+    "year": 2025,
+    "co2_price": 80.0,
+}
     
     scenario_parameters = {
         "weather_year": "2016",
@@ -431,17 +548,21 @@ def main() -> None:
     }
     
     # Run sensitivity analysis
-    results_df = run_co2_sensitivity_analysis(
+    results_df, cost_data, n_baseline = run_co2_sensitivity_analysis(
         cost_file=file_paths["cost_file"],
         timeseries_file=file_paths["timeseries_file"],
         financial_parameters=financial_parameters,
         scenario_parameters=scenario_parameters,
-        co2_cap_fractions=[1.0, 0.8, 0.6, 0.4, 0.2, 0.1],
+        co2_cap_fractions=[0.8, 0.6, 0.4, 0.2, 0.1],
+        co2_price=financial_parameters["co2_price"],
     )
     
     # Save results
     results_df.to_csv(OUTPUT_DIR / "co2_sensitivity_results.csv", index=False)
     print(f"\n✓ Saved results to {OUTPUT_DIR / 'co2_sensitivity_results.csv'}")
+    
+    # Print full results
+
     
     # Print summary
     print("\n" + "=" * 80)
@@ -453,8 +574,30 @@ def main() -> None:
     # Create visualizations
     print("\nCreating visualizations...")
     plot_co2_sensitivity(results_df, OUTPUT_DIR)
-    
     print(f"\n✓ Analysis complete! Results saved to {OUTPUT_DIR}")
+    
+    # Print generator cost table
+    print("\nGenerator Cost Data:")
+    gen_techs = ['CCGT', 'coal', 'nuclear', 'solar', 'onwind', 'offwind']
+    cost_cols = ['efficiency', 'VOM', 'fuel', 'fixed', 'CO2 intensity']
+    available_cols = [col for col in cost_cols if col in cost_data.columns]
+    print(cost_data.loc[cost_data.index.isin(gen_techs), available_cols].to_string())
+    
+    # Print marginal costs with CO2 price
+    co2_price = financial_parameters["co2_price"]
+    print(f"\nMarginal Costs (with CO2 price €{co2_price}/tCO2):")
+    for tech in ['CCGT', 'coal', 'nuclear']:
+        if tech in cost_data.index:
+            mc = calculate_conventional_marginal_cost(cost_data, tech, co2_price)
+            print(f"{tech}: €{mc:.2f}/MWh")
+    
+    # Print capacity shares
+    total_capacity = n_baseline.generators.p_nom_opt.sum()
+    print(f"\nCapacity shares (total: {total_capacity:.1f} MW):")
+    for gen in n_baseline.generators.index:
+        cap = n_baseline.generators.at[gen, 'p_nom_opt']
+        share = cap / total_capacity * 100 if total_capacity > 0 else 0
+        print(f"{gen}: {cap:.1f} MW ({share:.1f}%)")
 
 
 if __name__ == "__main__":

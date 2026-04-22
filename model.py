@@ -577,15 +577,6 @@ def create_regional_network(
 def apply_battery_ratio_constraint(n: pypsa.Network, sns) -> None:
     """
     Add constraint: charger and discharger power capacities must be equal.
-    
-    This ensures the battery can charge and discharge at the same rate.
-
-    Parameters
-    ----------
-    n : pypsa.Network
-        PyPSA network with an already created optimisation model.
-    sns :
-        Snapshots passed by PyPSA during optimisation.
     """
     if n.links.empty or not n.links.p_nom_extendable.any():
         return
@@ -598,11 +589,9 @@ def apply_battery_ratio_constraint(n: pypsa.Network, sns) -> None:
 
     charger_p_nom = n.model["Link-p_nom"].loc[charger_links]
     discharger_p_nom = n.model["Link-p_nom"].loc[discharger_links]
-    discharger_efficiency = n.links.loc[discharger_links, "efficiency"].values
 
-    lhs = charger_p_nom - discharger_p_nom * discharger_efficiency
+    lhs = charger_p_nom - discharger_p_nom
     n.model.add_constraints(lhs == 0, name="Link-battery_charger_ratio")
-
 
 def optimize_and_save_network(
     n: pypsa.Network,
@@ -620,7 +609,8 @@ def optimize_and_save_network(
         Path to the output .nc file.
     co2_limit_mt : float, optional
         CO2 emission limit in Mt CO2 per year. If None, no CO2 constraint is applied.
-        Uses PyPSA's GlobalConstraint feature.
+        Uses PyPSA's 
+Constraint feature.
     """
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -652,18 +642,19 @@ def optimize_and_save_network(
 
 if __name__ == "__main__":
     financial_parameters = {
-        "fill_values": 0.0,
-        "r": 0.07,
-        "nyears": 1,
-        "year": 2025,
-    }
-
+     "fill_values": 0.0,
+    "r": 0.07,
+     "nyears": 1,
+     "year": 2025,
+     "co2_price": 80.0,
+     }
+    
     scenario_parameters = {
-        "weather_year": "2016",
-        "with_battery_storage": True,
-        "with_interconnectors": False,
-        "countries": ["DK"]
-    }
+    "weather_year": "2016",
+     "with_battery_storage": True,
+     "with_interconnectors": False,
+     "countries": ["DK"] #, "DE", "SE", "NO"
+     }
 
     file_paths = {
         "cost_file": f"cost_data/costs_{financial_parameters['year']}.csv",
@@ -690,10 +681,18 @@ if __name__ == "__main__":
         all_timeseries_data=all_timeseries_data,
         with_battery_storage=scenario_parameters["with_battery_storage"],
         with_interconnectors=scenario_parameters["with_interconnectors"],
-        co2_price=0.0,
+        co2_price=financial_parameters["co2_price"],
     )
 
-    print("\nBASIC NETWORK INFO")
+    # Optimize and save network
+    optimize_and_save_network(
+        n=n,
+        output_file="results/optimized_network.nc",
+    )
+
+    print("\n" + "=" * 80)
+    print("BASIC NETWORK INFO")
+    print("=" * 80)
     print(f"Buses: {len(n.buses)}")
     print(f"Generators: {len(n.generators)}")
     print(f"Loads: {len(n.loads)}")
@@ -701,3 +700,14 @@ if __name__ == "__main__":
 
     print("\nCarrier CO2 emissions:")
     print(n.carriers[["co2_emissions"]])
+
+    
+    
+    print(cost_data.loc[["gas", "coal"], ["fuel", "efficiency", "VOM", "CO2 intensity"]])
+    print("Coal marginal cost:",
+          calculate_conventional_marginal_cost(cost_data, "coal", financial_parameters["co2_price"]))
+    print("CCGT marginal cost:",
+          calculate_conventional_marginal_cost(cost_data, "CCGT", financial_parameters["co2_price"]))
+    print("Nuclear marginal cost:",
+          calculate_conventional_marginal_cost(cost_data, "nuclear", financial_parameters["co2_price"]))    
+    

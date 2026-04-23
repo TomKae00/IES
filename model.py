@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from prettytable import PrettyTable
 
 import pandas as pd
 import pypsa
@@ -257,7 +258,7 @@ def attach_country_bus_and_load(
     )
 
 
-def add_carriers(n: pypsa.Network) -> None:
+def add_carriers(n: pypsa.Network, cost_data: pd.DataFrame) -> None:
     """
     Add carriers used in the system and define plotting colors.
 
@@ -265,19 +266,35 @@ def add_carriers(n: pypsa.Network) -> None:
     ----------
     n : pypsa.Network
         PyPSA network.
+    cost_data : pd.DataFrame
+            Prepared technology cost table.
     """
     carrier_data = {
-        "electricity": {"color": "#4C566A"},
-        "solar": {"color": "#EBCB3B"},
-        "onwind": {"color": "#5AA469"},
-        "offwind": {"color": "#2E86AB"},
-        "gas": {"color": "#D08770"},
-        "coal": {"color": "#5C5C5C"},
-        "nuclear": {"color": "#8F6BB3"},
-        "battery": {"color": "#E67E22"},  # orange
-        "battery charger": {"color": "#C06C84"},  # dusty pink
-        "battery discharger": {"color": "#6C5B7B"},  # muted purple
+        "electricity": {"color": "#4C566A", "co2_emissions": 0.0},
+        "solar": {"color": "#EBCB3B", "co2_emissions": 0.0},
+        "onwind": {"color": "#5AA469", "co2_emissions": 0.0},
+        "offwind": {"color": "#2E86AB", "co2_emissions": 0.0},
+        "gas": {"color": "#D08770", "co2_emissions": 0.4},
+        "coal": {"color": "#5C5C5C", "co2_emissions": 0.8},
+        "nuclear": {"color": "#8F6BB3", "co2_emissions": 0.0},
+        "battery": {"color": "#E67E22", "co2_emissions": 0.0},
+        "battery charger": {"color": "#C06C84", "co2_emissions": 0.0},
+        "battery discharger": {"color": "#6C5B7B", "co2_emissions": 0.0},
     }
+
+    if cost_data is not None:
+        if "CO2 intensity" in cost_data.columns:
+            if "gas" in cost_data.index:
+                carrier_data["gas"]["co2_emissions"] = cost_data.at["gas", "CO2 intensity"]
+            if "coal" in cost_data.index:
+                carrier_data["coal"]["co2_emissions"] = cost_data.at["coal", "CO2 intensity"]
+
+    for carrier, attrs in carrier_data.items():
+        if carrier not in n.carriers.index:
+            n.add("Carrier", carrier, **attrs)
+        else:
+            for key, value in attrs.items():
+                n.carriers.at[carrier, key] = value
 
     for carrier, attrs in carrier_data.items():
         if carrier not in n.carriers.index:
@@ -485,6 +502,65 @@ def attach_interconnectors_dk_region(n: pypsa.Network) -> None:
             v_nom=400.0,
         )
 
+def add_co2_cap(n: pypsa.Network, co2_cap: float) -> None:
+    """
+    Add a CO2 cap to the PyPSA network.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        PyPSA network.
+    co2_cap : float
+        CO2 emission cap in tCO2.
+    """
+    n.add("GlobalConstraint", 
+          "CO2_cap", 
+          type="primary_energy", 
+          carrier_attribute="co2_emissions",
+          sense="<=", 
+          constant=co2_cap
+          )
+
+def calculate_total_emissions(n: pypsa.Network) -> float:
+    """
+    Calculate total CO2 emissions [tCO2] from generator dispatch.
+
+    Oarameters
+    ----------
+    n : pypsa.Network
+        PyPSA network.
+
+    Returns
+    -------
+    float
+        Total CO2 emissions in tCO2.
+    """
+    total_emissions = 0.0
+
+    for generator in n.generators.index:
+        carrier = n.generators.at[generator, "carrier"]
+
+        if carrier not in n.carriers.index or "co2_emissions" not in n.carriers.columns:
+            continue
+
+        co2_intensity = n.carriers.at[carrier, "co2_emissions"]
+
+        if pd.isna(co2_intensity) or co2_intensity == 0:
+            continue
+
+        efficiency = (
+            n.generators.at[generator, "efficiency"]
+            if pd.notna(n.generators.at[generator, "efficiency"])
+            else 1.0
+        )
+
+        dispatch = n.generators_t.p[generator].sum()  # MWh_el
+        emissions = dispatch / efficiency * co2_intensity  # tCO2
+
+        total_emissions += emissions
+
+    return total_emissions
+
 
 def create_regional_network(
     cost_data: pd.DataFrame,
@@ -492,6 +568,8 @@ def create_regional_network(
     co2_price: float,
     with_battery_storage: bool,
     with_interconnectors: bool,
+    with_co2_cap: bool,
+    co2_cap: float
 ) -> pypsa.Network:
     """
     Create a regional PyPSA network with Denmark and neighbouring countries.
@@ -506,6 +584,12 @@ def create_regional_network(
         CO2 price in EUR/tCO2.
     with_battery_storage : bool
         Whether to include battery storage for Denmark.
+    with_interconnectors : bool
+        Whether to include interconnectors for the region.
+    with_co2_cap : bool
+        Whether to include a CO2 cap for the region.
+    co2_cap : float
+        CO2 cap in tCO2.
 
     Returns
     -------
@@ -517,7 +601,7 @@ def create_regional_network(
     reference_country = list(all_timeseries_data.keys())[0]
     n.set_snapshots(all_timeseries_data[reference_country]["load"].index)
 
-    add_carriers(n)
+    add_carriers(n, cost_data=cost_data)
 
     for country_code, timeseries_data in all_timeseries_data.items():
         attach_country_bus_and_load(
@@ -548,6 +632,13 @@ def create_regional_network(
 
     if with_interconnectors:
         attach_interconnectors_dk_region(n)
+
+
+    if with_co2_cap:
+        add_co2_cap(
+            n=n,
+            co2_cap=co2_cap
+        )
 
     return n
 
@@ -665,91 +756,124 @@ def add_gas_pipeline(
     return link_names
 
 
-# if __name__ == "__main__":
-#     financial_parameters = {
-#         "fill_values": 0.0,
-#         "r": 0.07,
-#         "nyears": 1,
-#         "year": 2025,
-#         "co2_price": 80.0,
-#     }
+if __name__ == "__main__":
 
-#     scenario_parameters = {
-#         "weather_year": "2016",
-#         "with_battery_storage": True,
-#         "with_interconnectors": False,
-#         "countries": ["DK"] #, "DE", "SE", "NO"
-#     }
+    baseline_emissions = 26150838.82214536  # tCO2, from the optimized network without CO2 cap
+    allowed_emissions_share = [0.7, 0.5, 0.3, 0.1]
+    results = []
 
-#     file_paths = {
-#         "cost_file": f"cost_data/costs_{financial_parameters['year']}.csv",
-#         "timeseries_file": "Data/time_series_60min_singleindex_alldata.csv",
-#         "output_file": "results/dk_base_battery_network_2016.nc",
-#     }
+    for cap in allowed_emissions_share:
+        financial_parameters = {
+            "fill_values": 0.0,
+            "r": 0.07,
+            "nyears": 1,
+            "year": 2025,
+            "co2_price": 0.0,  #80.0
+            "co2_cap": baseline_emissions * cap,  # tCO2
+        }
 
-#     cost_data = prepare_costs(
-#         cost_file=file_paths["cost_file"],
-#         financial_parameters=financial_parameters,
-#         number_of_years=financial_parameters["nyears"],
-#     )
+        scenario_parameters = {
+            "weather_year": "2016",
+            "with_battery_storage": True,
+            "with_interconnectors": False,
+            "countries": ["DK"],  #, "DE", "SE", "NO",
+            "with_co2_cap": True
+        }
 
-#     all_timeseries_data = {}
+        file_paths = {
+            "cost_file": f"cost_data/costs_{financial_parameters['year']}.csv",
+            "timeseries_file": "Data/time_series_60min_singleindex_alldata.csv",
+            "output_file": "results/dk_base_battery_network_2016.nc",
+        }
 
-#     for country_code in scenario_parameters["countries"]:
-#         all_timeseries_data[country_code] = load_country_timeseries(
-#             timeseries_file=file_paths["timeseries_file"],
-#             country_code=country_code,
-#             year=scenario_parameters["weather_year"],
-#         )
+        cost_data = prepare_costs(
+            cost_file=file_paths["cost_file"],
+            financial_parameters=financial_parameters,
+            number_of_years=financial_parameters["nyears"],
+        )
 
-#     n = create_regional_network(
-#         cost_data=cost_data,
-#         all_timeseries_data=all_timeseries_data,
-#         co2_price=financial_parameters["co2_price"],
-#         with_battery_storage=scenario_parameters["with_battery_storage"],
-#         with_interconnectors=scenario_parameters["with_interconnectors"],
-#     )
+        all_timeseries_data = {}
 
-#     print("\nBUSES")
-#     print(n.buses.dtypes)
+        for country_code in scenario_parameters["countries"]:
+            all_timeseries_data[country_code] = load_country_timeseries(
+                timeseries_file=file_paths["timeseries_file"],
+                country_code=country_code,
+                year=scenario_parameters["weather_year"],
+            )
 
-#     print("\nGENERATORS")
-#     print(n.generators.dtypes)
+        n = create_regional_network(
+            cost_data=cost_data,
+            all_timeseries_data=all_timeseries_data,
+            co2_price=financial_parameters["co2_price"],
+            with_battery_storage=scenario_parameters["with_battery_storage"],
+            with_interconnectors=scenario_parameters["with_interconnectors"],
+            with_co2_cap=scenario_parameters["with_co2_cap"],
+            co2_cap=financial_parameters["co2_cap"]
+        )
 
-#     print("\nLOADS")
-#     print(n.loads.dtypes)
+        print("\nBUSES")
+        print(n.buses.dtypes)
 
-#     print("\nSTORES")
-#     print(n.stores.dtypes)
+        print("\nGENERATORS")
+        print(n.generators.dtypes)
 
-#     print("\nLINKS")
-#     print(n.links.dtypes)
+        print("\nLOADS")
+        print(n.loads.dtypes)
 
-#     print("\nLINES")
-#     print(n.lines.dtypes)
+        print("\nSTORES")
+        print(n.stores.dtypes)
 
-#     print("\nINDEX DTYPES")
-#     print("buses index:", n.buses.index.dtype)
-#     print("generators index:", n.generators.index.dtype)
-#     print("loads index:", n.loads.index.dtype)
-#         print("stores index:", n.stores.index.dtype)
-#         print("links index:", n.links.index.dtype)
-#         print("lines index:", n.lines.index.dtype)
+        print("\nLINKS")
+        print(n.links.dtypes)
 
-#     optimize_and_save_network(
-#         n=n,
-#         output_file=file_paths["output_file"],
-#     )
+        print("\nLINES")
+        print(n.lines.dtypes)
 
-#     print("\nOptimized generator capacities [MW]:")
-#     print(n.generators.p_nom_opt)
+        print("\nINDEX DTYPES")
+        print("buses index:", n.buses.index.dtype)
+        print("generators index:", n.generators.index.dtype)
+        print("loads index:", n.loads.index.dtype)
+        print("stores index:", n.stores.index.dtype)
+        print("links index:", n.links.index.dtype)
+        print("lines index:", n.lines.index.dtype)
 
-#     if scenario_parameters["with_battery_storage"]:
-#         print("\nOptimized battery energy capacity [MWh]:")
-#         print(n.stores.e_nom_opt)
+        optimize_and_save_network(
+            n=n,
+            output_file=file_paths["output_file"],
+        )
 
-#         print("\nOptimized battery power capacities [MW]:")
-#         print(n.links.p_nom_opt)
+        print("\nOptimized generator capacities [MW]:")
+        print(n.generators.p_nom_opt)
 
-    print("\nObjective value:")
-    print(n.objective)
+        if scenario_parameters["with_battery_storage"]:
+            print("\nOptimized battery energy capacity [MWh]:")
+            print(n.stores.e_nom_opt)
+
+            print("\nOptimized battery power capacities [MW]:")
+            print(n.links.p_nom_opt)
+
+        print("\nObjective value:")
+        print(n.objective)
+
+        print("\nGlobal constraints:")
+        print(n.global_constraints)
+
+        if "mu" in n.global_constraints.columns and "co2_cap" in n.global_constraints.index:
+            print("\nImplied CO2 price [EUR/tCO2]:")
+            print(n.global_constraints.loc["co2_cap", "mu"])
+
+        print("\nTotal CO2 emissions [tCO2]:")
+        print(calculate_total_emissions(n))
+
+        results.append({
+        "cap": cap,
+        "emissions": calculate_total_emissions(n),
+        "price": abs(n.global_constraints.loc["CO2_cap", "mu"])
+})
+
+    print("\nTotal emission acceptance and co2 cap price for different scenarios [tCO2]:")
+    print(" ")
+    t = PrettyTable(["Allowed Emissions Share", "Total Emission Acceptance [tCO2]", "CO2 Cap Price [EUR/tCO2]"])
+    for result in results:
+        t.add_row([result["cap"], result["emissions"], result["price"]])
+    print(t)

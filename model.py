@@ -758,8 +758,8 @@ def add_gas_pipeline(
 
 if __name__ == "__main__":
 
-    baseline_emissions = 26150838.82214536  # tCO2, from the optimized network without CO2 cap
-    allowed_emissions_share = [0.7, 0.5, 0.3, 0.1]
+    baseline_emissions = 391987031.3182317  # tCO2, from the optimized network without CO2 cap
+    allowed_emissions_share = [0.7, 0.5, 0.3, 0.2, 0.1, 0.0]
     results = []
 
     for cap in allowed_emissions_share:
@@ -769,14 +769,14 @@ if __name__ == "__main__":
             "nyears": 1,
             "year": 2025,
             "co2_price": 0.0,  #80.0
-            "co2_cap": baseline_emissions * cap,  # tCO2
+            "co2_cap": baseline_emissions * cap  # tCO2
         }
 
         scenario_parameters = {
             "weather_year": "2016",
             "with_battery_storage": True,
-            "with_interconnectors": False,
-            "countries": ["DK"],  #, "DE", "SE", "NO",
+            "with_interconnectors": True,
+            "countries": ["DK", "DE", "SE", "NO"],  #, "DE", "SE", "NO",
             "with_co2_cap": True
         }
 
@@ -869,7 +869,7 @@ if __name__ == "__main__":
         "cap": cap,
         "emissions": calculate_total_emissions(n),
         "price": abs(n.global_constraints.loc["CO2_cap", "mu"])
-})
+        })
 
     print("\nTotal emission acceptance and co2 cap price for different scenarios [tCO2]:")
     print(" ")

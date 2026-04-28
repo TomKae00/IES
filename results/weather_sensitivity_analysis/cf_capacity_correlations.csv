@@ -1,0 +1,4 @@
+technology,cf_column,correlation_capacity_vs_cf
+solar,solar_cf_mean,0.5853371337704045
+onshore wind,onshore_wind_cf_mean,0.45873085780770206
+offshore wind,offshore_wind_cf_mean,0.6258757911475952

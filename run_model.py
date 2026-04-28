@@ -21,7 +21,7 @@ from model.scenarios import (
 
 
 # Change this to run another scenario
-ACTIVE_SCENARIO = "base"
+ACTIVE_SCENARIO = "sector_coupling"
 
 
 def main() -> None:

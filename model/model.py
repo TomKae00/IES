@@ -33,26 +33,43 @@ def add_carriers(n: pypsa.Network) -> None:
     Add all carriers used across possible scenarios.
     """
     carrier_data = {
-        "electricity": {"color": "#4C566A"},
+        # Electricity
+        "AC": {"color": "#4C566A"},
+
+        # Electricity generation
         "solar": {"color": "#EBCB3B"},
         "onwind": {"color": "#5AA469"},
         "offwind": {"color": "#2E86AB"},
-        "gas": {"color": "#D08770"},
+        "gas CCGT": {"color": "#D08770"},
         "coal": {"color": "#5C5C5C"},
         "nuclear": {"color": "#8F6BB3"},
+
+        # Battery
         "battery": {"color": "#E67E22"},
         "battery charger": {"color": "#C06C84"},
         "battery discharger": {"color": "#6C5B7B"},
+
+        # CH4 network
         "CH4": {"color": "#A35D3D"},
-        "H2": {"color": "#4DA3FF"},
-        "CH4 pipeline": {"color": "#7B4B2A"},
-        "H2 pipeline": {"color": "#2F6DB3"},
         "CH4 supply": {"color": "#8C564B"},
-        "electrolysis": {"color": "#3A86FF"},
+        "CH4 pipeline": {"color": "#7B4B2A"},
         "CCGT": {"color": "#D08770"},
+
+        # H2 network
+        "H2": {"color": "#4DA3FF"},
+        "H2 store": {"color": "#7FDBFF"},
+        "H2 pipeline": {"color": "#2F6DB3"},
+        "electrolysis": {"color": "#3A86FF"},
         "H2 turbine": {"color": "#6FA8DC"},
+        "H2 fuel cell": {"color": "#5E81AC"},
+
+        # Heat sector
         "heat": {"color": "#B48EAD"},
         "heat pump": {"color": "#A3BE8C"},
+        "resistive heater": {"color": "#BF616A"},
+        "gas boiler": {"color": "#A35D3D"},
+
+        # Heat storage
         "heat storage": {"color": "#D8DEE9"},
         "heat storage charger": {"color": "#88C0D0"},
         "heat storage discharger": {"color": "#81A1C1"},
@@ -76,18 +93,21 @@ def set_carrier_co2_emissions(
         n.carriers["co2_emissions"] = 0.0
 
     if "gas" in cost_data.index and "CO2 intensity" in cost_data.columns:
-        n.carriers.loc["gas", "co2_emissions"] = cost_data.at[
-            "gas", "CO2 intensity"
-        ]
-        n.carriers.loc["CH4 supply", "co2_emissions"] = cost_data.at[
-            "gas", "CO2 intensity"
-        ]
+        gas_co2_intensity = cost_data.at["gas", "CO2 intensity"]
+
+        # Simplified gas-fired electricity generator
+        n.carriers.loc["gas CCGT", "co2_emissions"] = gas_co2_intensity
+
+        # Explicit CH4 supply into the CH4 network
+        n.carriers.loc["CH4 supply", "co2_emissions"] = gas_co2_intensity
+
+        # Simplified gas boiler generator in the heat sector
+        n.carriers.loc["gas boiler", "co2_emissions"] = gas_co2_intensity
 
     if "coal" in cost_data.index and "CO2 intensity" in cost_data.columns:
         n.carriers.loc["coal", "co2_emissions"] = cost_data.at[
             "coal", "CO2 intensity"
         ]
-
 
 # =========================================================
 # BASE ELECTRICITY MODEL
@@ -114,68 +134,68 @@ def add_electricity(
         n.add(
             "Bus",
             country_code,
-            carrier="electricity",
+            carrier="AC",
         )
 
         n.add(
             "Load",
             f"{country_code}_electricity_demand",
             bus=country_code,
-            carrier="electricity",
+            carrier="AC",
             p_set=timeseries_data["load"],
         )
 
         # -----------------------------
         # Solar PV
         # -----------------------------
-        if "solar" in cost_data.index:
-            n.add(
-                "Generator",
-                f"{country_code}_solar",
-                bus=country_code,
-                carrier="solar",
-                p_nom_extendable=True,
-                p_max_pu=timeseries_data["solar_cf"],
-                capital_cost=cost_data.at["solar", "fixed"],
-                marginal_cost=cost_data.at["solar", "VOM"],
-            )
+        n.add(
+            "Generator",
+            f"{country_code}_solar",
+            bus=country_code,
+            carrier="solar",
+            p_nom_extendable=True,
+            p_max_pu=timeseries_data["solar_cf"],
+            capital_cost=cost_data.at["solar", "fixed"],
+            marginal_cost=cost_data.at["solar", "VOM"],
+        )
 
         # -----------------------------
         # Onshore wind
         # -----------------------------
-        if "onwind" in cost_data.index:
-            n.add(
-                "Generator",
-                f"{country_code}_onshore_wind",
-                bus=country_code,
-                carrier="onwind",
-                p_nom_extendable=True,
-                p_max_pu=timeseries_data["onshore_wind_cf"],
-                capital_cost=cost_data.at["onwind", "fixed"],
-                marginal_cost=cost_data.at["onwind", "VOM"],
-            )
+        n.add(
+            "Generator",
+            f"{country_code}_onshore_wind",
+            bus=country_code,
+            carrier="onwind",
+            p_nom_extendable=True,
+            p_max_pu=timeseries_data["onshore_wind_cf"],
+            capital_cost=cost_data.at["onwind", "fixed"],
+            marginal_cost=cost_data.at["onwind", "VOM"],
+        )
 
         # -----------------------------
         # Offshore wind
         # -----------------------------
-        if "offwind" in cost_data.index:
-            n.add(
-                "Generator",
-                f"{country_code}_offshore_wind",
-                bus=country_code,
-                carrier="offwind",
-                p_nom_extendable=True,
-                p_max_pu=timeseries_data["offshore_wind_cf"],
-                capital_cost=cost_data.at["offwind", "fixed"],
-                marginal_cost=cost_data.at["offwind", "VOM"],
-            )
+        n.add(
+            "Generator",
+            f"{country_code}_offshore_wind",
+            bus=country_code,
+            carrier="offwind",
+            p_nom_extendable=True,
+            p_max_pu=timeseries_data["offshore_wind_cf"],
+            capital_cost=cost_data.at["offwind", "fixed"],
+            marginal_cost=cost_data.at["offwind", "VOM"],
+        )
 
         # -----------------------------
         # CCGT
         # -----------------------------
         # Only add CCGT as a normal generator if gas is not explicitly modeled.
         # If with_gas_network=True, CCGT is added later as a CH4-to-electricity link.
-        if not scenario["with_gas_network"] and "CCGT" in cost_data.index:
+        if (
+                not scenario.get("with_ch4_network", False)
+                and not scenario.get("with_h2_network", False)
+        ):
             marginal_cost = calculate_conventional_marginal_cost(
                 cost_data=cost_data,
                 technology="CCGT",
@@ -186,7 +206,7 @@ def add_electricity(
                 "Generator",
                 f"{country_code}_CCGT",
                 bus=country_code,
-                carrier="gas",
+                carrier="gas CCGT",
                 p_nom_extendable=True,
                 capital_cost=cost_data.at["CCGT", "fixed"],
                 marginal_cost=marginal_cost,
@@ -196,23 +216,22 @@ def add_electricity(
         # -----------------------------
         # Coal
         # -----------------------------
-        if "coal" in cost_data.index:
-            marginal_cost = calculate_conventional_marginal_cost(
-                cost_data=cost_data,
-                technology="coal",
-                co2_price=scenario["co2_price"],
-            )
+        marginal_cost = calculate_conventional_marginal_cost(
+            cost_data=cost_data,
+            technology="coal",
+            co2_price=scenario["co2_price"],
+        )
 
-            n.add(
-                "Generator",
-                f"{country_code}_coal",
-                bus=country_code,
-                carrier="coal",
-                p_nom_extendable=True,
-                capital_cost=cost_data.at["coal", "fixed"],
-                marginal_cost=marginal_cost,
-                efficiency=cost_data.at["coal", "efficiency"],
-            )
+        n.add(
+            "Generator",
+            f"{country_code}_coal",
+            bus=country_code,
+            carrier="coal",
+            p_nom_extendable=True,
+            capital_cost=cost_data.at["coal", "fixed"],
+            marginal_cost=marginal_cost,
+            efficiency=cost_data.at["coal", "efficiency"],
+        )
 
         # -----------------------------
         # Nuclear
@@ -234,7 +253,7 @@ def add_electricity(
                 marginal_cost=marginal_cost,
                 efficiency=cost_data.at["nuclear", "efficiency"],
 
-                # Optional if you want less flexible nuclear:
+                # ensure nuclear is run less flexible:
                 p_min_pu=0.5,
                 ramp_limit_up=0.3,
                 ramp_limit_down=0.3,
@@ -345,8 +364,8 @@ def add_interconnectors(n: pypsa.Network) -> None:
             s_nom=capacity,
             s_nom_extendable=False,
             x=0.1,
-            r=0.0,
-            v_nom=400.0,
+            r=0.1,
+            #v_nom=400.0,
         )
 
 
@@ -362,42 +381,39 @@ def add_gas(
     """
     Add gas sector components to the network.
 
-    This includes:
-    - CH4 and H2 buses for each modeled country
-    - CCGT as CH4-to-electricity conversion
-    - electrolysis as electricity-to-H2 conversion
-    - optional H2 turbine as H2-to-electricity conversion
-    - CH4 supply in Norway
-    - CH4 and H2 pipelines between modeled countries
+    The gas sector can include CH4, H2, or both, depending on the scenario:
+
+    - with_ch4_network:
+        CH4 buses, CH4 supply, CCGT links, CH4 pipelines
+
+    - with_h2_network:
+        H2 buses, electrolysis, optional H2 turbine/fuel cell, H2 pipelines
 
     Note
     ----
-    If the gas network is enabled, CCGT should not be added as a normal
+    If the CH4 network is enabled, CCGT should not be added as a normal
     electricity generator in add_electricity(). Instead, it is represented here
     as a conversion link from CH4 to electricity.
     """
     countries = scenario["countries"]
 
+    with_ch4_network = scenario.get("with_ch4_network", True)
+    with_h2_network = scenario.get("with_h2_network", True)
+
+    if not with_ch4_network and not with_h2_network:
+        raise ValueError("add_gas() was called although both CH4 and H2 networks are disabled.")
+
     for country_code in countries:
         # -----------------------------
-        # Gas buses
+        # CH4 system
         # -----------------------------
-        n.add(
-            "Bus",
-            f"{country_code}_CH4",
-            carrier="CH4",
-        )
+        if with_ch4_network:
+            n.add(
+                "Bus",
+                f"{country_code}_CH4",
+                carrier="CH4",
+            )
 
-        n.add(
-            "Bus",
-            f"{country_code}_H2",
-            carrier="H2",
-        )
-
-        # -----------------------------
-        # CCGT: CH4 -> electricity
-        # -----------------------------
-        if "CCGT" in cost_data.index:
             n.add(
                 "Link",
                 f"{country_code}_CCGT",
@@ -411,9 +427,15 @@ def add_gas(
             )
 
         # -----------------------------
-        # Electrolysis: electricity -> H2
+        # H2 system
         # -----------------------------
-        if "electrolysis" in cost_data.index:
+        if with_h2_network:
+            n.add(
+                "Bus",
+                f"{country_code}_H2",
+                carrier="H2",
+            )
+
             n.add(
                 "Link",
                 f"{country_code}_electrolyzer",
@@ -426,10 +448,6 @@ def add_gas(
                 marginal_cost=cost_data.at["electrolysis", "VOM"],
             )
 
-        # -----------------------------
-        # Optional H2 turbine: H2 -> electricity
-        # -----------------------------
-        if scenario.get("with_h2_turbine", False) and "OCGT" in cost_data.index:
             n.add(
                 "Link",
                 f"{country_code}_H2_turbine",
@@ -437,52 +455,75 @@ def add_gas(
                 bus1=country_code,
                 carrier="H2 turbine",
                 p_nom_extendable=True,
-                efficiency=0.5,
+                efficiency=cost_data.at["OCGT", "efficiency"],
                 capital_cost=cost_data.at["OCGT", "fixed"],
                 marginal_cost=cost_data.at["OCGT", "VOM"],
+            )
+
+            n.add(
+                "Link",
+                f"{country_code}_H2_fuel_cell",
+                bus0=f"{country_code}_H2",
+                bus1=country_code,
+                carrier="H2 fuel cell",
+                p_nom_extendable=True,
+                efficiency=cost_data.at["fuel cell", "efficiency"],
+                capital_cost=cost_data.at["fuel cell", "fixed"],
+                marginal_cost=cost_data.at["fuel cell", "VOM"],
+            )
+
+            # H2 storage
+            n.add(
+                "Store",
+                f"{country_code}_H2_store",
+                bus=f"{country_code}_H2",
+                carrier="H2 store",
+                e_nom_extendable=True,
+                e_cyclic=True,
+                capital_cost=cost_data.at[
+                    "hydrogen storage tank type 1 including compressor",
+                    "fixed",
+                ],
             )
 
     # -----------------------------
     # CH4 supply
     # -----------------------------
-    if "NO" in countries:
-        if "gas" not in cost_data.index:
-            raise KeyError("'gas' must exist in cost_data to model CH4 supply.")
+    if with_ch4_network:
+        if "NO" in countries:
+            fuel_cost = cost_data.at["gas", "fuel"]
 
-        fuel_cost = cost_data.at["gas", "fuel"]
+            if "CO2 intensity" in cost_data.columns:
+                co2_intensity = cost_data.at["gas", "CO2 intensity"]
+                co2_cost = co2_intensity * scenario["co2_price"]
+            else:
+                co2_cost = 0.0
 
-        if "CO2 intensity" in cost_data.columns:
-            co2_intensity = cost_data.at["gas", "CO2 intensity"]
-            co2_cost = co2_intensity * scenario["co2_price"]
+            n.add(
+                "Generator",
+                "NO_CH4_supply",
+                bus="NO_CH4",
+                carrier="CH4 supply",
+                p_nom_extendable=True,
+                capital_cost=0.0,
+                marginal_cost=fuel_cost + co2_cost,
+            )
         else:
-            co2_cost = 0.0
-
-        n.add(
-            "Generator",
-            "NO_CH4_supply",
-            bus="NO_CH4",
-            carrier="CH4 supply",
-            p_nom_extendable=True,
-            capital_cost=0.0,
-            marginal_cost=fuel_cost + co2_cost,
-        )
-
-    else:
-        print("Warning: NO not in modeled countries. No CH4 supply added.")
+            print("Warning: NO not in modeled countries. No CH4 supply added.")
 
     # -----------------------------
     # Gas pipelines
     # -----------------------------
     gas_corridor_data = [
-        ("NO", "DK", "NO_DK", 600.0, True),
-        ("NO", "SE", "NO_SE", 500.0, True),
-        ("NO", "DE", "NO_DE", 900.0, True),
-        ("DK", "SE", "DK_SE", 300.0, True),
-        ("DK", "DE", "DK_DE", 250.0, True),
-        ("DE", "SE", "DE_SE", 700.0, True),
+        ("NO", "DK", "NO_DK", 600.0),
+        ("NO", "SE", "NO_SE", 500.0),
+        ("NO", "DE", "NO_DE", 900.0),
+        ("DK", "SE", "DK_SE", 300.0),
+        ("DK", "DE", "DK_DE", 250.0),
+        ("DE", "SE", "DE_SE", 700.0),
     ]
 
-    for country_a, country_b, corridor_name, length_km, submarine in gas_corridor_data:
+    for country_a, country_b, corridor_name, length_km in gas_corridor_data:
         if country_a not in countries or country_b not in countries:
             print(
                 f"Skipping gas corridor {corridor_name}: "
@@ -493,14 +534,12 @@ def add_gas(
         # -----------------------------
         # CH4 pipeline
         # -----------------------------
-        if submarine:
-            ch4_tech_name = "CH4 (g) submarine pipeline"
-        else:
+        if with_ch4_network:
             ch4_tech_name = "CH4 (g) pipeline"
 
-        if ch4_tech_name in cost_data.index:
             ch4_capital_cost = cost_data.at[ch4_tech_name, "fixed"] * length_km
             ch4_electricity_input = cost_data.at[ch4_tech_name, "electricity-input"]
+
             ch4_efficiency = 1.0 - ch4_electricity_input * length_km / 1000.0
             ch4_efficiency = max(ch4_efficiency, 0.0)
 
@@ -512,7 +551,7 @@ def add_gas(
                 carrier="CH4 pipeline",
                 p_nom_extendable=True,
                 efficiency=ch4_efficiency,
-                capital_cost=ch4_capital_cost,
+                #capital_cost=ch4_capital_cost,
                 marginal_cost=0.0,
             )
 
@@ -524,24 +563,19 @@ def add_gas(
                 carrier="CH4 pipeline",
                 p_nom_extendable=True,
                 efficiency=ch4_efficiency,
-                capital_cost=ch4_capital_cost,
+                #capital_cost=ch4_capital_cost,
                 marginal_cost=0.0,
             )
-
-        else:
-            print(f"Warning: {ch4_tech_name} not found in cost_data. Skipping CH4 pipeline.")
 
         # -----------------------------
         # H2 pipeline
         # -----------------------------
-        if submarine:
-            h2_tech_name = "H2 (g) submarine pipeline"
-        else:
+        if with_h2_network:
             h2_tech_name = "H2 (g) pipeline"
 
-        if h2_tech_name in cost_data.index:
             h2_capital_cost = cost_data.at[h2_tech_name, "fixed"] * length_km
             h2_electricity_input = cost_data.at[h2_tech_name, "electricity-input"]
+
             h2_efficiency = 1.0 - h2_electricity_input * length_km / 1000.0
             h2_efficiency = max(h2_efficiency, 0.0)
 
@@ -569,8 +603,6 @@ def add_gas(
                 marginal_cost=0.0,
             )
 
-        else:
-            print(f"Warning: {h2_tech_name} not found in cost_data. Skipping H2 pipeline.")
 
 # =========================================================
 # SECTOR COUPLING EXTENSION: HEAT
@@ -583,13 +615,15 @@ def add_heat(
     heat_timeseries: dict[str, dict[str, pd.Series]],
 ) -> None:
     """
-    Add a simple heat sector to all modeled countries.
+    Add a decentral heat sector to all modeled countries.
 
-    The heat sector is represented by:
+    The heat sector includes:
     - one heat bus per country
     - one heat demand per country
-    - one air-source heat pump converting electricity to heat per country
-    - optionally one heat storage per country
+    - one decentral air-sourced heat pump per country
+    - one decentral resistive heater per country
+    - one decentral gas boiler per country
+    - optionally one decentral water tank storage per country
 
     Heat demand:
         {country_code}_heat_demand_total
@@ -600,11 +634,11 @@ def add_heat(
     For Norway, Danish heat demand and COP profiles are used as a proxy in
     helpers.load_heat_timeseries().
     """
+    with_ch4_network = scenario.get("with_ch4_network", False)
+
     for country_code in scenario["countries"]:
         if country_code not in heat_timeseries:
-            raise KeyError(
-                f"No heat time series found for {country_code}."
-            )
+            raise KeyError(f"No heat time series found for {country_code}.")
 
         heat_demand = heat_timeseries[country_code]["heat_demand"]
         heat_pump_cop = heat_timeseries[country_code]["ashp_cop"]
@@ -633,30 +667,9 @@ def add_heat(
         )
 
         # -----------------------------
-        # Air-source heat pump: electricity -> heat
+        # Decentral air-sourced heat pump: electricity -> heat
         # -----------------------------
-        possible_heat_pump_cost_names = [
-            "central air-sourced heat pump",
-            "decentral air-sourced heat pump",
-            "air-sourced heat pump",
-        ]
-
-        heat_pump_cost_name = next(
-            (
-                technology
-                for technology in possible_heat_pump_cost_names
-                if technology in cost_data.index
-            ),
-            None,
-        )
-
-        if heat_pump_cost_name is None:
-            print("Warning: No ASHP cost found. Using zero heat pump costs.")
-            heat_pump_capital_cost = 0.0
-            heat_pump_marginal_cost = 0.0
-        else:
-            heat_pump_capital_cost = cost_data.at[heat_pump_cost_name, "fixed"]
-            heat_pump_marginal_cost = cost_data.at[heat_pump_cost_name, "VOM"]
+        heat_pump_tech = "decentral air-sourced heat pump"
 
         n.add(
             "Link",
@@ -666,79 +679,141 @@ def add_heat(
             carrier="heat pump",
             p_nom_extendable=True,
             efficiency=heat_pump_cop,
-            capital_cost=heat_pump_capital_cost,
-            marginal_cost=heat_pump_marginal_cost,
+            capital_cost=cost_data.at[heat_pump_tech, "fixed"],
+            marginal_cost=cost_data.at[heat_pump_tech, "VOM"],
         )
 
         # -----------------------------
-        # Optional heat storage
+        # Decentral resistive heater: electricity -> heat
         # -----------------------------
-        if scenario.get("with_heat_storage", False):
-            possible_heat_storage_cost_names = [
-                "central water tank storage",
-                "water tank storage",
-                "hot water storage",
-            ]
+        resistive_heater_tech = "decentral resistive heater"
 
-            heat_storage_cost_name = next(
-                (
-                    technology
-                    for technology in possible_heat_storage_cost_names
-                    if technology in cost_data.index
-                ),
-                None,
+        n.add(
+            "Link",
+            f"{country_code}_resistive_heater",
+            bus0=country_code,
+            bus1=heat_bus,
+            carrier="resistive heater",
+            p_nom_extendable=True,
+            efficiency=cost_data.at[resistive_heater_tech, "efficiency"],
+            capital_cost=cost_data.at[resistive_heater_tech, "fixed"],
+            marginal_cost=cost_data.at[resistive_heater_tech, "VOM"],
+        )
+
+        # -----------------------------
+        # Decentral gas boiler
+        # -----------------------------
+        gas_boiler_tech = "decentral gas boiler"
+        gas_boiler_efficiency = cost_data.at[gas_boiler_tech, "efficiency"]
+
+        if with_ch4_network:
+            # If CH4 is explicitly modeled, the gas boiler consumes CH4 from
+            # the country CH4 bus. Fuel cost and emissions are accounted for
+            # when CH4 enters the system through CH4 supply.
+            n.add(
+                "Link",
+                f"{country_code}_gas_boiler",
+                bus0=f"{country_code}_CH4",
+                bus1=heat_bus,
+                carrier="gas boiler",
+                p_nom_extendable=True,
+                efficiency=gas_boiler_efficiency,
+                capital_cost=cost_data.at[gas_boiler_tech, "fixed"],
+                marginal_cost=cost_data.at[gas_boiler_tech, "VOM"],
             )
 
-            if heat_storage_cost_name is None:
-                print(
-                    "Warning: No heat storage cost found. "
-                    "Using zero heat storage costs."
-                )
-                heat_storage_capital_cost = 0.0
-            else:
-                heat_storage_capital_cost = cost_data.at[
-                    heat_storage_cost_name,
-                    "fixed",
-                ]
+        else:
+            # If CH4 is not explicitly modeled, represent the gas boiler as a
+            # fuel-consuming heat generator. In this case, the CO2 constraint
+            # can account for emissions through the gas boiler carrier.
+            gas_fuel_cost = cost_data.at["gas", "fuel"]
 
-            # Heat storage bus
+            if "CO2 intensity" in cost_data.columns:
+                gas_co2_intensity = cost_data.at["gas", "CO2 intensity"]
+                gas_boiler_co2_cost = (
+                    gas_co2_intensity
+                    / gas_boiler_efficiency
+                    * scenario["co2_price"]
+                )
+            else:
+                gas_boiler_co2_cost = 0.0
+
+            gas_boiler_marginal_cost = (
+                gas_fuel_cost / gas_boiler_efficiency
+                + cost_data.at[gas_boiler_tech, "VOM"]
+                + gas_boiler_co2_cost
+            )
+
+            n.add(
+                "Generator",
+                f"{country_code}_gas_boiler",
+                bus=heat_bus,
+                carrier="gas boiler",
+                p_nom_extendable=True,
+                efficiency=gas_boiler_efficiency,
+                capital_cost=cost_data.at[gas_boiler_tech, "fixed"],
+                marginal_cost=gas_boiler_marginal_cost,
+            )
+
+        # -----------------------------
+        # Optional decentral water tank storage
+        # -----------------------------
+        if scenario.get("with_heat_storage", False):
+            water_tank_storage_tech = "decentral water tank storage"
+            water_tank_charger_tech = "decentral water tank charger"
+            water_tank_discharger_tech = "decentral water tank discharger"
+
             n.add(
                 "Bus",
                 heat_storage_bus,
                 carrier="heat storage",
             )
 
-            # Heat energy store
-            n.add(
-                "Store",
-                f"{country_code}_heat_store",
-                bus=heat_storage_bus,
-                carrier="heat storage",
-                e_nom_extendable=True,
-                e_cyclic=True,
-                capital_cost=heat_storage_capital_cost,
-            )
-
-            # Charge link: heat bus -> heat storage bus
             n.add(
                 "Link",
-                f"{country_code}_heat_store_charger",
+                f"{country_code}_water_tank_charger",
                 bus0=heat_bus,
                 bus1=heat_storage_bus,
                 carrier="heat storage charger",
                 p_nom_extendable=True,
-                efficiency=1.0,
+                efficiency=cost_data.at[water_tank_charger_tech, "efficiency"],
+                marginal_cost=cost_data.at[water_tank_charger_tech, "VOM"],
             )
 
-            # Discharge link: heat storage bus -> heat bus
             n.add(
                 "Link",
-                f"{country_code}_heat_store_discharger",
+                f"{country_code}_water_tank_discharger",
                 bus0=heat_storage_bus,
                 bus1=heat_bus,
                 carrier="heat storage discharger",
                 p_nom_extendable=True,
-                efficiency=1.0,
+                efficiency=cost_data.at[water_tank_discharger_tech, "efficiency"],
+                marginal_cost=cost_data.at[water_tank_discharger_tech, "VOM"],
+            )
+
+            # Store the energy-to-power ratio as metadata. This does not yet
+            # enforce the ratio as a constraint.
+            n.links.loc[
+                f"{country_code}_water_tank_charger",
+                "energy_to_power_ratio",
+            ] = cost_data.at[
+                water_tank_storage_tech,
+                "energy to power ratio",
+            ]
+
+            n.add(
+                "Store",
+                f"{country_code}_water_tank_store",
+                bus=heat_storage_bus,
+                carrier="heat storage",
+                e_nom_extendable=True,
+                e_cyclic=True,
+                standing_loss=cost_data.at[
+                    water_tank_storage_tech,
+                    "standing losses",
+                ]
+                / 100,
+                capital_cost=cost_data.at[water_tank_storage_tech, "fixed"],
             )
 
 
@@ -769,29 +844,122 @@ def add_global_co2_constraint(
 # CUSTOM OPTIMIZATION CONSTRAINTS
 # =========================================================
 
-def custom_constraints(n: pypsa.Network, snapshots) -> None:
+def add_battery_charger_ratio_constraints(n: pypsa.Network) -> None:
     """
-    Add custom optimization constraints.
+    Add battery charger/discharger capacity ratio constraints.
 
-    Currently couples battery charger and discharger capacities.
+    For each battery, enforce:
+
+        charger_p_nom - discharger_efficiency * discharger_p_nom == 0
     """
     if n.links.empty or not n.links.p_nom_extendable.any():
         return
 
-    charger_links = n.links.index[n.links.index.str.contains("battery_charger")]
-    discharger_links = n.links.index[n.links.index.str.contains("battery_discharger")]
+    charger_links = n.links.index[
+        n.links.index.str.contains("_battery_charger")
+        & n.links.p_nom_extendable
+    ]
 
-    if len(charger_links) == 0 or len(discharger_links) == 0:
+    discharger_links = n.links.index[
+        n.links.index.str.contains("_battery_discharger")
+        & n.links.p_nom_extendable
+    ]
+
+    if charger_links.empty or discharger_links.empty:
+        print(
+            "No extendable battery charger/discharger links found. "
+            "Skipping battery charger ratio constraints."
+        )
         return
 
-    charger_p_nom = n.model["Link-p_nom"].loc[charger_links]
-    discharger_p_nom = n.model["Link-p_nom"].loc[discharger_links]
+    for charger_link in charger_links:
+        discharger_link = charger_link.replace(
+            "_battery_charger",
+            "_battery_discharger",
+        )
 
-    discharger_efficiency = n.links.loc[discharger_links, "efficiency"].values
+        if discharger_link not in discharger_links:
+            raise RuntimeError(
+                f"Could not find matching battery discharger '{discharger_link}' "
+                f"for charger link '{charger_link}'."
+            )
 
-    lhs = charger_p_nom - discharger_p_nom * discharger_efficiency
+        charger_p_nom = n.model["Link-p_nom"].loc[charger_link]
+        discharger_p_nom = n.model["Link-p_nom"].loc[discharger_link]
 
-    n.model.add_constraints(lhs == 0, name="Link-battery_charger_ratio")
+        discharger_efficiency = n.links.at[discharger_link, "efficiency"]
+
+        n.model.add_constraints(
+            charger_p_nom - discharger_efficiency * discharger_p_nom == 0,
+            name=f"battery_charger_ratio_{charger_link}",
+        )
+
+
+def add_tes_energy_to_power_ratio_constraints(n: pypsa.Network) -> None:
+    """
+    Add thermal energy storage energy-to-power ratio constraints.
+
+    For each water tank storage unit, enforce:
+
+        Store-e_nom - energy_to_power_ratio * Link-p_nom == 0
+    """
+    charger_links = n.links.index[
+        n.links.index.str.contains("_water_tank_charger")
+        & n.links.p_nom_extendable
+    ]
+
+    if charger_links.empty:
+        print(
+            "No extendable water tank charger links found. "
+            "Skipping TES energy-to-power ratio constraints."
+        )
+        return
+
+    if "energy_to_power_ratio" not in n.links.columns:
+        raise KeyError(
+            "Column 'energy_to_power_ratio' not found in n.links. "
+            "Make sure it is assigned when adding the water tank charger."
+        )
+
+    for charger_link in charger_links:
+        store_name = charger_link.replace(
+            "_water_tank_charger",
+            "_water_tank_store",
+        )
+
+        if store_name not in n.stores.index:
+            raise RuntimeError(
+                f"Could not find matching TES store '{store_name}' "
+                f"for charger link '{charger_link}'."
+            )
+
+        if not n.stores.at[store_name, "e_nom_extendable"]:
+            print(
+                f"Store '{store_name}' is not extendable. "
+                "Skipping TES energy-to-power ratio constraint."
+            )
+            continue
+
+        energy_to_power_ratio = n.links.at[
+            charger_link,
+            "energy_to_power_ratio",
+        ]
+
+        charger_p_nom = n.model["Link-p_nom"].loc[charger_link]
+        store_e_nom = n.model["Store-e_nom"].loc[store_name]
+
+        n.model.add_constraints(
+            store_e_nom - energy_to_power_ratio * charger_p_nom == 0,
+            name=f"TES_energy_to_power_ratio_{store_name}",
+        )
+
+
+def custom_constraints(n: pypsa.Network, snapshots) -> None:
+    """
+    Add custom optimization constraints.
+    """
+    add_battery_charger_ratio_constraints(n)
+    add_tes_energy_to_power_ratio_constraints(n)
 
 
 # =========================================================
@@ -830,28 +998,30 @@ def create_network(
     if scenario["with_interconnectors"]:
         add_interconnectors(n)
 
-    if scenario["with_gas_network"]:
+    if scenario["with_ch4_network"] or scenario["with_h2_network"]:
         add_gas(
             n=n,
             cost_data=cost_data,
             scenario=scenario,
         )
 
-    if scenario["co2_limit"] is not None:
-        add_global_co2_constraint(
-            n=n,
-            co2_limit=scenario["co2_limit"],
-        )
-
     if scenario["with_heat_sector"]:
         if heat_timeseries is None:
-            raise ValueError("Heat sector is enabled, but no heat_timeseries were provided.")
+            raise ValueError(
+                "Heat sector is enabled, but no heat_timeseries were provided."
+            )
 
         add_heat(
             n=n,
             cost_data=cost_data,
             scenario=scenario,
             heat_timeseries=heat_timeseries,
+        )
+
+    if scenario["co2_limit"] is not None:
+        add_global_co2_constraint(
+            n=n,
+            co2_limit=scenario["co2_limit"],
         )
 
     return n

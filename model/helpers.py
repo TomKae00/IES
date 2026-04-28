@@ -81,6 +81,8 @@ def load_country_timeseries(
     """
     Load electricity demand and renewable capacity factors for one country.
 
+    Missing hourly values in the required input columns are interpolated.
+
     Returns
     -------
     dict[str, pd.Series]
@@ -100,17 +102,73 @@ def load_country_timeseries(
     raw_timeseries = raw_timeseries.set_index("utc_timestamp")
     raw_timeseries.index = raw_timeseries.index.tz_localize(None)
 
-    yearly_timeseries = raw_timeseries.loc[f"{year}-01-01":f"{year}-12-31"].copy()
-
     load_column = f"{country_code}_load_actual_entsoe_transparency"
 
-    if load_column not in yearly_timeseries.columns:
+    renewable_columns = [
+        f"{country_code}_solar_generation_actual",
+        f"{country_code}_solar_capacity",
+        f"{country_code}_wind_onshore_generation_actual",
+        f"{country_code}_wind_onshore_capacity",
+        f"{country_code}_wind_offshore_generation_actual",
+        f"{country_code}_wind_offshore_capacity",
+    ]
+
+    required_columns = [load_column] + [
+        column for column in renewable_columns if column in raw_timeseries.columns
+    ]
+
+    if load_column not in raw_timeseries.columns:
         raise KeyError(
             f"Load column '{load_column}' not found in {timeseries_file}."
         )
 
-    electricity_load = yearly_timeseries[load_column].copy()
+    yearly_timeseries = raw_timeseries.loc[
+        f"{year}-01-01":f"{year}-12-31",
+        required_columns,
+    ].copy()
 
+    # Convert required columns to numeric.
+    for column in yearly_timeseries.columns:
+        yearly_timeseries[column] = (
+            yearly_timeseries[column]
+            .astype(str)
+            .str.replace(",", ".", regex=False)
+        )
+
+        yearly_timeseries[column] = pd.to_numeric(
+            yearly_timeseries[column],
+            errors="coerce",
+        )
+
+    expected_index = pd.date_range(
+        start=f"{year}-01-01 00:00:00",
+        end=f"{year}-12-31 23:00:00",
+        freq="h",
+    )
+
+    yearly_timeseries = yearly_timeseries.reindex(expected_index)
+
+    missing_timestamps = yearly_timeseries.index[
+        yearly_timeseries.isna().any(axis=1)
+    ]
+
+    if len(missing_timestamps) > 0:
+        print(
+            f"Warning: electricity time series for {country_code} has "
+            f"{len(missing_timestamps)} timestamps with missing values in {year}. "
+            "Missing values are interpolated."
+        )
+        print(missing_timestamps)
+
+    yearly_timeseries = yearly_timeseries.interpolate(method="time")
+    yearly_timeseries = yearly_timeseries.ffill().bfill()
+
+    if yearly_timeseries[load_column].isna().any():
+        raise ValueError(
+            f"Load column '{load_column}' still contains NaN values after interpolation."
+        )
+
+    electricity_load = yearly_timeseries[load_column].copy()
     zero_series = pd.Series(0.0, index=yearly_timeseries.index)
 
     def capacity_factor_from_columns(
@@ -251,8 +309,14 @@ def load_heat_timeseries(
 
     Norway is not included in the heat data file. Therefore, Danish heat demand
     and COP profiles are used as a proxy for Norway.
+
+    Missing hourly values are filled by time interpolation.
     """
-    raw_heat_data = pd.read_csv(heat_file)
+    raw_heat_data = pd.read_csv(
+        heat_file,
+        sep=None,
+        engine="python",
+    )
 
     raw_heat_data["utc_timestamp"] = pd.to_datetime(
         raw_heat_data["utc_timestamp"],
@@ -262,26 +326,89 @@ def load_heat_timeseries(
     raw_heat_data = raw_heat_data.set_index("utc_timestamp")
     raw_heat_data.index = raw_heat_data.index.tz_localize(None)
 
-    yearly_heat_data = raw_heat_data.loc[f"{year}-01-01":f"{year}-12-31"].copy()
+    # Select only columns that are actually needed for the modeled countries.
+    required_columns = []
+
+    for country_code in countries:
+        data_country_code = "DK" if country_code == "NO" else country_code
+
+        required_columns.extend(
+            [
+                f"{data_country_code}_heat_demand_total",
+                f"{data_country_code}_COP_ASHP_floor",
+            ]
+        )
+
+    # Remove duplicates, because NO uses DK columns.
+    required_columns = list(dict.fromkeys(required_columns))
+
+    missing_columns = [
+        column for column in required_columns if column not in raw_heat_data.columns
+    ]
+
+    if missing_columns:
+        raise KeyError(
+            f"The following required heat columns are missing in {heat_file}: "
+            f"{missing_columns}"
+        )
+
+    yearly_heat_data = raw_heat_data.loc[
+        f"{year}-01-01":f"{year}-12-31",
+        required_columns,
+    ].copy()
+
+    # Convert only the required numeric columns.
+    for column in yearly_heat_data.columns:
+        yearly_heat_data[column] = (
+            yearly_heat_data[column]
+            .astype(str)
+            .str.replace(",", ".", regex=False)
+        )
+
+        yearly_heat_data[column] = pd.to_numeric(
+            yearly_heat_data[column],
+            errors="coerce",
+        )
+
+    expected_index = pd.date_range(
+        start=f"{year}-01-01 00:00:00",
+        end=f"{year}-12-31 23:00:00",
+        freq="h",
+    )
+
+    yearly_heat_data = yearly_heat_data.reindex(expected_index)
+
+    missing_timestamps = yearly_heat_data.index[
+        yearly_heat_data.isna().any(axis=1)
+    ]
+
+    if len(missing_timestamps) > 0:
+        print(
+            f"Warning: heat time series has {len(missing_timestamps)} missing "
+            f"timestamps in {year}. Missing values are interpolated."
+        )
+        print(missing_timestamps)
+
+    yearly_heat_data = yearly_heat_data.interpolate(method="time")
+    yearly_heat_data = yearly_heat_data.ffill().bfill()
+
+    if yearly_heat_data.isna().any().any():
+        missing_columns_after_interpolation = yearly_heat_data.columns[
+            yearly_heat_data.isna().any()
+        ].tolist()
+
+        raise ValueError(
+            "Heat time series still contains NaN values after interpolation. "
+            f"Affected columns: {missing_columns_after_interpolation}"
+        )
 
     heat_timeseries = {}
 
     for country_code in countries:
-        # Norway is approximated with Danish data because NO is missing.
         data_country_code = "DK" if country_code == "NO" else country_code
 
         heat_demand_column = f"{data_country_code}_heat_demand_total"
         cop_column = f"{data_country_code}_COP_ASHP_floor"
-
-        if heat_demand_column not in yearly_heat_data.columns:
-            raise KeyError(
-                f"Heat demand column '{heat_demand_column}' not found in {heat_file}."
-            )
-
-        if cop_column not in yearly_heat_data.columns:
-            raise KeyError(
-                f"COP column '{cop_column}' not found in {heat_file}."
-            )
 
         heat_timeseries[country_code] = {
             "heat_demand": yearly_heat_data[heat_demand_column].copy(),

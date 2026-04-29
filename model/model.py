@@ -587,7 +587,7 @@ def add_gas(
                 carrier="H2 pipeline",
                 p_nom_extendable=True,
                 efficiency=h2_efficiency,
-                capital_cost=h2_capital_cost,
+                #capital_cost=h2_capital_cost,
                 marginal_cost=0.0,
             )
 
@@ -599,7 +599,7 @@ def add_gas(
                 carrier="H2 pipeline",
                 p_nom_extendable=True,
                 efficiency=h2_efficiency,
-                capital_cost=h2_capital_cost,
+                #capital_cost=h2_capital_cost,
                 marginal_cost=0.0,
             )
 

@@ -143,10 +143,10 @@ SCENARIOS = {
     # -----------------------------------------------------
     "sector_coupling": {
         "name": "sector_coupling_heat",
-        "weather_year": "2015",
+        "weather_year": "2016",
         "countries": ["DK", "DE", "SE", "NO"],
 
-        "with_battery_storage": False,
+        "with_battery_storage": True,
         "with_interconnectors": True,
 
         "with_ch4_network": True,

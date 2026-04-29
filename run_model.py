@@ -21,8 +21,7 @@ from model.scenarios import (
 
 
 # Change this to run another scenario
-ACTIVE_SCENARIO = "sector_coupling"
-
+ACTIVE_SCENARIO = "sensitivity_gas_ch4_only_co2_0"
 
 def main() -> None:
     silence_gurobi_logger()

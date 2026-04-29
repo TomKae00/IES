@@ -114,6 +114,24 @@ SCENARIOS = {
         "co2_limit": None,
     },
 
+    "gas_H2_only_co2_80": {
+        "name": "gas_H2_only_co2_80",
+        "weather_year": "2019",
+        "countries": ["DK", "DE", "SE", "NO"],
+
+        "with_battery_storage": True,
+        "with_interconnectors": True,
+
+        "with_ch4_network": False,
+        "with_h2_network": True,
+
+        "with_heat_sector": False,
+        "with_heat_storage": False,
+
+        "co2_price": 80.0,
+        "co2_limit": None,
+    },
+
     # -----------------------------------------------------
     # Part 2i: Sector-coupled heat model
     # -----------------------------------------------------
@@ -133,6 +151,46 @@ SCENARIOS = {
 
         "co2_price": 80.0,
         "co2_limit": None,
+    },
+
+    # -----------------------------------------------------
+    # Task g: CO2 price sensitivity (gas network analysis)
+    # Run each scenario via run_model.py, then plot with
+    # analyze_gas_network.plot_co2_sensitivity().
+    # Saved as: sensitivity_ch4_co2_{price}_2019.nc / sensitivity_h2_co2_{price}_2019.nc
+    # -----------------------------------------------------
+    **{
+        f"sensitivity_gas_ch4_only_co2_{price}": {
+            "name": f"sensitivity_gas_ch4_only_co2_{price}",
+            "weather_year": "2019",
+            "countries": ["DK", "DE", "SE", "NO"],
+            "with_battery_storage": True,
+            "with_interconnectors": True,
+            "with_ch4_network": True,
+            "with_h2_network": False,
+            "with_heat_sector": False,
+            "with_heat_storage": False,
+            "co2_price": float(price),
+            "co2_limit": None,
+        }
+        for price in [0, 50, 100, 150, 200, 300]
+    },
+
+    **{
+        f"sensitivity_gas_H2_only_co2_{price}": {
+            "name": f"sensitivity_gas_H2_only_co2_{price}",
+            "weather_year": "2019",
+            "countries": ["DK", "DE", "SE", "NO"],
+            "with_battery_storage": True,
+            "with_interconnectors": True,
+            "with_ch4_network": False,
+            "with_h2_network": True,
+            "with_heat_sector": False,
+            "with_heat_storage": False,
+            "co2_price": float(price),
+            "co2_limit": None,
+        }
+        for price in [0, 50, 100, 150, 200, 300]
     },
 
     # -----------------------------------------------------

@@ -198,29 +198,29 @@ def add_electricity(
         # -----------------------------
         # Offshore wind
         # -----------------------------
-        if country_code == "DK":
-            n.add(
-                "Generator",
-                f"{country_code}_offshore_wind",
-                bus=country_code,
-                carrier="offwind",
-                p_nom_extendable=True,
-                p_nom_max=2650,
-                p_max_pu=timeseries_data["offshore_wind_cf"],
-                capital_cost=cost_data.at["offwind", "fixed"],
-                marginal_cost=cost_data.at["offwind", "VOM"],
-                )
-        else:
-            n.add(
-                "Generator",
-                f"{country_code}_offshore_wind",
-                bus=country_code,
-                carrier="offwind",
-                p_nom_extendable=True,
-                p_max_pu=timeseries_data["offshore_wind_cf"],
-                capital_cost=cost_data.at["offwind", "fixed"],
-                marginal_cost=cost_data.at["offwind", "VOM"],
-            )
+        #if country_code == "DK":
+        #    n.add(
+        #        "Generator",
+        #        f"{country_code}_offshore_wind",
+        #        bus=country_code,
+        #        carrier="offwind",
+        #        p_nom_extendable=True,
+        #        p_nom_max=2650,
+        #        p_max_pu=timeseries_data["offshore_wind_cf"],
+        #        capital_cost=cost_data.at["offwind", "fixed"],
+        #        marginal_cost=cost_data.at["offwind", "VOM"],
+        #        )
+        #else:
+        n.add(
+            "Generator",
+            f"{country_code}_offshore_wind",
+            bus=country_code,
+            carrier="offwind",
+            p_nom_extendable=True,
+            p_max_pu=timeseries_data["offshore_wind_cf"],
+            capital_cost=cost_data.at["offwind", "fixed"],
+            marginal_cost=cost_data.at["offwind", "VOM"],
+        )
 
         # -----------------------------
         # CCGT
@@ -1434,7 +1434,7 @@ def plot_denmark_dispatch_strategy(n, folder):
     plt.xticks(rotation=45)
     plt.tight_layout()
 
-    outfile = folder / "denmark_dispatch_strategy_winter_week.png"
+    outfile = folder / "denmark_dispatch_strategy_winter_week_without_cap.png"
     plt.savefig(outfile, dpi=300, bbox_inches="tight")
     plt.close()
 
@@ -1531,7 +1531,7 @@ def plot_annual_mix_from_balance(n: pypsa.Network, output_dir: Path) -> None:
     )
 
     fig.tight_layout()
-    fig.savefig(output_dir / "annual_danish_electricity_mix.png", dpi=300)
+    fig.savefig(output_dir / "annual_danish_electricity_mix_without_cap.png", dpi=300)
     plt.close(fig)
 
 
@@ -1650,7 +1650,7 @@ def plot_capacity_factors_over_year(n: pypsa.Network, output_dir: Path) -> None:
     ax.legend(loc="center left", bbox_to_anchor=(1, 0.5), title="Technology")
 
     fig.tight_layout()
-    fig.savefig(output_dir / "capacity_factors_over_year_dk.png", dpi=300)
+    fig.savefig(output_dir / "capacity_factors_over_year_dk_without_cap.png", dpi=300)
     plt.close(fig)
 
 

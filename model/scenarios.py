@@ -136,24 +136,24 @@ SCENARIOS = {
     },
 
     # -----------------------------------------------------
-    # Example for Part 2f / 2h: CO2 constrained model
+    # Part 2h: CO2 cap model
     # -----------------------------------------------------
-    "co2_constraint": {
-        "name": "co2_constraint",
+    "co2_cap": {
+        "name": "co2_cap",
         "weather_year": "2016",
-        "countries": ["DK"],
+        "countries": ["DK", "DE", "SE", "NO"],
 
-        "with_battery_storage": False,
-        "with_interconnectors": False,
-        "with_gas_network": False,
-        "with_h2_turbine": False,
+        "with_battery_storage": True,
+        "with_interconnectors": True,
+
+        "with_ch4_network": True,
+        "with_h2_network": False,
+
         "with_heat_sector": False,
         "with_heat_storage": False,
 
-        "co2_price": 80.0,
-
-        # Unit should be tCO2 over the full modeled period.
-        # Set this to the value you want to test.
-        "co2_limit": 1_000_000.0,
+        "co2_cap": 0.3,
+        "co2_price": 0.0,
+        "co2_limit": None,
     },
 }

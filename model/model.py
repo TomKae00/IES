@@ -587,7 +587,7 @@ def add_gas(
                 carrier="H2 pipeline",
                 p_nom_extendable=True,
                 efficiency=h2_efficiency,
-                capital_cost=h2_capital_cost,
+                #capital_cost=h2_capital_cost,
                 marginal_cost=0.0,
             )
 
@@ -599,7 +599,7 @@ def add_gas(
                 carrier="H2 pipeline",
                 p_nom_extendable=True,
                 efficiency=h2_efficiency,
-                capital_cost=h2_capital_cost,
+                #capital_cost=h2_capital_cost,
                 marginal_cost=0.0,
             )
 
@@ -954,12 +954,19 @@ def add_tes_energy_to_power_ratio_constraints(n: pypsa.Network) -> None:
         )
 
 
-def custom_constraints(n: pypsa.Network, snapshots) -> None:
+def custom_constraints(
+    n: pypsa.Network,
+    snapshots,
+    scenario: dict,
+) -> None:
     """
-    Add custom optimization constraints.
+    Add custom optimization constraints depending on active scenario options.
     """
-    add_battery_charger_ratio_constraints(n)
-    add_tes_energy_to_power_ratio_constraints(n)
+    if scenario.get("with_battery_storage", False):
+        add_battery_charger_ratio_constraints(n)
+
+    if scenario.get("with_heat_storage", False):
+        add_tes_energy_to_power_ratio_constraints(n)
 
 
 # =========================================================
@@ -1033,6 +1040,7 @@ def create_network(
 def optimize_and_save_network(
     n: pypsa.Network,
     output_file: str | Path,
+    scenario: dict,
     solver_name: str = "gurobi",
 ) -> None:
     """
@@ -1041,14 +1049,23 @@ def optimize_and_save_network(
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    def extra_functionality(n: pypsa.Network, snapshots) -> None:
+        custom_constraints(
+            n=n,
+            snapshots=snapshots,
+            scenario=scenario,
+        )
+
     n.optimize(
         n.snapshots,
-        extra_functionality=custom_constraints,
+        extra_functionality=extra_functionality,
         solver_name=solver_name,
         solver_options={},
+        include_objective_constant=False,
     )
 
     n.export_to_netcdf(output_path)
+
 
     print(f"\nOptimized network saved to: {output_path}")
 

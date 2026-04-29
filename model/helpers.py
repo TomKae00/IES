@@ -81,6 +81,10 @@ def load_country_timeseries(
     """
     Load electricity demand and renewable capacity factors for one country.
 
+    Electricity demand is always taken from 2016 and mapped to the selected
+    model year. Renewable generation and capacity data are taken from the
+    selected weather year.
+
     Missing hourly values in the required input columns are interpolated.
 
     Returns
@@ -92,6 +96,9 @@ def load_country_timeseries(
         - onshore_wind_cf
         - offshore_wind_cf
     """
+    demand_year = 2016
+    weather_year = int(year)
+
     raw_timeseries = pd.read_csv(timeseries_file)
 
     raw_timeseries["utc_timestamp"] = pd.to_datetime(
@@ -113,63 +120,125 @@ def load_country_timeseries(
         f"{country_code}_wind_offshore_capacity",
     ]
 
-    required_columns = [load_column] + [
-        column for column in renewable_columns if column in raw_timeseries.columns
-    ]
-
     if load_column not in raw_timeseries.columns:
         raise KeyError(
             f"Load column '{load_column}' not found in {timeseries_file}."
         )
 
-    yearly_timeseries = raw_timeseries.loc[
-        f"{year}-01-01":f"{year}-12-31",
-        required_columns,
+    # -----------------------------
+    # Load demand from fixed demand year
+    # -----------------------------
+    demand_data = raw_timeseries.loc[
+        f"{demand_year}-01-01":f"{demand_year}-12-31",
+        [load_column],
     ].copy()
 
-    # Convert required columns to numeric.
-    for column in yearly_timeseries.columns:
-        yearly_timeseries[column] = (
-            yearly_timeseries[column]
-            .astype(str)
-            .str.replace(",", ".", regex=False)
-        )
+    demand_data[load_column] = (
+        demand_data[load_column]
+        .astype(str)
+        .str.replace(",", ".", regex=False)
+    )
 
-        yearly_timeseries[column] = pd.to_numeric(
-            yearly_timeseries[column],
-            errors="coerce",
-        )
+    demand_data[load_column] = pd.to_numeric(
+        demand_data[load_column],
+        errors="coerce",
+    )
 
-    expected_index = pd.date_range(
-        start=f"{year}-01-01 00:00:00",
-        end=f"{year}-12-31 23:00:00",
+    demand_index = pd.date_range(
+        start=f"{demand_year}-01-01 00:00:00",
+        end=f"{demand_year}-12-31 23:00:00",
         freq="h",
     )
 
-    yearly_timeseries = yearly_timeseries.reindex(expected_index)
+    demand_data = demand_data.reindex(demand_index)
 
-    missing_timestamps = yearly_timeseries.index[
-        yearly_timeseries.isna().any(axis=1)
+    missing_demand_timestamps = demand_data.index[
+        demand_data[load_column].isna()
     ]
 
-    if len(missing_timestamps) > 0:
+    if len(missing_demand_timestamps) > 0:
         print(
-            f"Warning: electricity time series for {country_code} has "
-            f"{len(missing_timestamps)} timestamps with missing values in {year}. "
+            f"Warning: electricity demand time series for {country_code} has "
+            f"{len(missing_demand_timestamps)} missing timestamps in {demand_year}. "
             "Missing values are interpolated."
         )
-        print(missing_timestamps)
+        print(missing_demand_timestamps)
 
-    yearly_timeseries = yearly_timeseries.interpolate(method="time")
-    yearly_timeseries = yearly_timeseries.ffill().bfill()
+    demand_data = demand_data.interpolate(method="time")
+    demand_data = demand_data.ffill().bfill()
 
-    if yearly_timeseries[load_column].isna().any():
+    if demand_data[load_column].isna().any():
         raise ValueError(
             f"Load column '{load_column}' still contains NaN values after interpolation."
         )
 
-    electricity_load = yearly_timeseries[load_column].copy()
-    zero_series = pd.Series(0.0, index=yearly_timeseries.index)
+    # -----------------------------
+    # Load renewable data from selected weather year
+    # -----------------------------
+    weather_required_columns = [
+        column for column in renewable_columns if column in raw_timeseries.columns
+    ]
+
+    weather_data = raw_timeseries.loc[
+        f"{weather_year}-01-01":f"{weather_year}-12-31",
+        weather_required_columns,
+    ].copy()
+
+    for column in weather_data.columns:
+        weather_data[column] = (
+            weather_data[column]
+            .astype(str)
+            .str.replace(",", ".", regex=False)
+        )
+
+        weather_data[column] = pd.to_numeric(
+            weather_data[column],
+            errors="coerce",
+        )
+
+    target_index = pd.date_range(
+        start=f"{weather_year}-01-01 00:00:00",
+        end=f"{weather_year}-12-31 23:00:00",
+        freq="h",
+    )
+
+    weather_data = weather_data.reindex(target_index)
+
+    missing_weather_timestamps = weather_data.index[
+        weather_data.isna().any(axis=1)
+    ]
+
+    if len(missing_weather_timestamps) > 0:
+        print(
+            f"Warning: renewable time series for {country_code} has "
+            f"{len(missing_weather_timestamps)} timestamps with missing values "
+            f"in {weather_year}. Missing values are interpolated."
+        )
+        print(missing_weather_timestamps)
+
+    weather_data = weather_data.interpolate(method="time")
+    weather_data = weather_data.ffill().bfill()
+
+    # -----------------------------
+    # Map fixed 2016 demand onto selected model year
+    # -----------------------------
+    if len(target_index) <= len(demand_data):
+        mapped_demand = demand_data.iloc[: len(target_index)].copy()
+    else:
+        missing_hours = len(target_index) - len(demand_data)
+
+        extension = demand_data.iloc[-24:].copy()
+        repeats = int(-(-missing_hours // 24))
+        extension = pd.concat([extension] * repeats).iloc[:missing_hours]
+
+        mapped_demand = pd.concat([demand_data, extension])
+
+    mapped_demand = mapped_demand.iloc[: len(target_index)].copy()
+    mapped_demand.index = target_index
+
+    electricity_load = mapped_demand[load_column].copy()
+
+    zero_series = pd.Series(0.0, index=target_index)
 
     def capacity_factor_from_columns(
         generation_column: str,
@@ -181,15 +250,15 @@ def load_country_timeseries(
         If the required columns are missing, return a zero series.
         """
         if (
-            generation_column not in yearly_timeseries.columns
-            or capacity_column not in yearly_timeseries.columns
+            generation_column not in weather_data.columns
+            or capacity_column not in weather_data.columns
         ):
             return zero_series.copy()
 
-        capacity = yearly_timeseries[capacity_column].replace(0, pd.NA)
+        capacity = weather_data[capacity_column].replace(0, pd.NA)
 
         capacity_factor = (
-            yearly_timeseries[generation_column] / capacity
+            weather_data[generation_column] / capacity
         ).fillna(0.0)
 
         return capacity_factor.clip(lower=0.0, upper=1.0)
@@ -301,17 +370,22 @@ def load_heat_timeseries(
     """
     Load heat demand and air-source heat pump COP time series for all modeled countries.
 
-    The heat demand uses:
+    Heat demand uses:
         {country_code}_heat_demand_total
 
-    The heat pump COP uses:
+    Heat pump COP uses:
         {country_code}_COP_ASHP_floor
+
+    The heat input file only contains reliable data for 2015.
+    Therefore, the 2015 heat demand and COP profiles are reused for all model years
+    and mapped onto the requested model year.
 
     Norway is not included in the heat data file. Therefore, Danish heat demand
     and COP profiles are used as a proxy for Norway.
-
-    Missing hourly values are filled by time interpolation.
     """
+    heat_data_year = 2015
+    target_year = int(year)
+
     raw_heat_data = pd.read_csv(
         heat_file,
         sep=None,
@@ -326,7 +400,6 @@ def load_heat_timeseries(
     raw_heat_data = raw_heat_data.set_index("utc_timestamp")
     raw_heat_data.index = raw_heat_data.index.tz_localize(None)
 
-    # Select only columns that are actually needed for the modeled countries.
     required_columns = []
 
     for country_code in countries:
@@ -339,11 +412,11 @@ def load_heat_timeseries(
             ]
         )
 
-    # Remove duplicates, because NO uses DK columns.
     required_columns = list(dict.fromkeys(required_columns))
 
     missing_columns = [
-        column for column in required_columns if column not in raw_heat_data.columns
+        column for column in required_columns
+        if column not in raw_heat_data.columns
     ]
 
     if missing_columns:
@@ -352,55 +425,75 @@ def load_heat_timeseries(
             f"{missing_columns}"
         )
 
-    yearly_heat_data = raw_heat_data.loc[
-        f"{year}-01-01":f"{year}-12-31",
+    source_heat_data = raw_heat_data.loc[
+        f"{heat_data_year}-01-01":f"{heat_data_year}-12-31",
         required_columns,
     ].copy()
 
-    # Convert only the required numeric columns.
-    for column in yearly_heat_data.columns:
-        yearly_heat_data[column] = (
-            yearly_heat_data[column]
+    for column in source_heat_data.columns:
+        source_heat_data[column] = (
+            source_heat_data[column]
             .astype(str)
             .str.replace(",", ".", regex=False)
         )
 
-        yearly_heat_data[column] = pd.to_numeric(
-            yearly_heat_data[column],
+        source_heat_data[column] = pd.to_numeric(
+            source_heat_data[column],
             errors="coerce",
         )
 
-    expected_index = pd.date_range(
-        start=f"{year}-01-01 00:00:00",
-        end=f"{year}-12-31 23:00:00",
+    source_index = pd.date_range(
+        start=f"{heat_data_year}-01-01 00:00:00",
+        end=f"{heat_data_year}-12-31 23:00:00",
         freq="h",
     )
 
-    yearly_heat_data = yearly_heat_data.reindex(expected_index)
+    source_heat_data = source_heat_data.reindex(source_index)
 
-    missing_timestamps = yearly_heat_data.index[
-        yearly_heat_data.isna().any(axis=1)
+    missing_timestamps = source_heat_data.index[
+        source_heat_data.isna().any(axis=1)
     ]
 
     if len(missing_timestamps) > 0:
         print(
-            f"Warning: heat time series has {len(missing_timestamps)} missing "
-            f"timestamps in {year}. Missing values are interpolated."
+            f"Warning: heat source time series has {len(missing_timestamps)} "
+            f"missing timestamps in {heat_data_year}. "
+            "Missing values are interpolated."
         )
         print(missing_timestamps)
 
-    yearly_heat_data = yearly_heat_data.interpolate(method="time")
-    yearly_heat_data = yearly_heat_data.ffill().bfill()
+    source_heat_data = source_heat_data.interpolate(method="time")
+    source_heat_data = source_heat_data.ffill().bfill()
 
-    if yearly_heat_data.isna().any().any():
-        missing_columns_after_interpolation = yearly_heat_data.columns[
-            yearly_heat_data.isna().any()
+    if source_heat_data.isna().any().any():
+        missing_columns_after_interpolation = source_heat_data.columns[
+            source_heat_data.isna().any()
         ].tolist()
 
         raise ValueError(
-            "Heat time series still contains NaN values after interpolation. "
+            "Heat source time series still contains NaN values after interpolation. "
             f"Affected columns: {missing_columns_after_interpolation}"
         )
+
+    target_index = pd.date_range(
+        start=f"{target_year}-01-01 00:00:00",
+        end=f"{target_year}-12-31 23:00:00",
+        freq="h",
+    )
+
+    if len(target_index) <= len(source_heat_data):
+        mapped_heat_data = source_heat_data.iloc[: len(target_index)].copy()
+    else:
+        missing_hours = len(target_index) - len(source_heat_data)
+
+        extension = source_heat_data.iloc[-24:].copy()
+        repeats = int(-(-missing_hours // 24))
+        extension = pd.concat([extension] * repeats).iloc[:missing_hours]
+
+        mapped_heat_data = pd.concat([source_heat_data, extension])
+
+    mapped_heat_data = mapped_heat_data.iloc[: len(target_index)].copy()
+    mapped_heat_data.index = target_index
 
     heat_timeseries = {}
 
@@ -411,8 +504,8 @@ def load_heat_timeseries(
         cop_column = f"{data_country_code}_COP_ASHP_floor"
 
         heat_timeseries[country_code] = {
-            "heat_demand": yearly_heat_data[heat_demand_column].copy(),
-            "ashp_cop": yearly_heat_data[cop_column].copy(),
+            "heat_demand": mapped_heat_data[heat_demand_column].copy(),
+            "ashp_cop": mapped_heat_data[cop_column].copy(),
         }
 
     return heat_timeseries

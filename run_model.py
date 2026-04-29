@@ -21,7 +21,7 @@ from model.scenarios import (
 
 
 # Change this to run another scenario
-ACTIVE_SCENARIO = "sector_coupling"
+ACTIVE_SCENARIO = "interconnected"
 
 
 def main() -> None:
@@ -70,6 +70,7 @@ def main() -> None:
     optimize_and_save_network(
         n=n,
         output_file=output_file,
+        scenario=scenario
     )
 
     print_model_summary(n)

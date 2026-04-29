@@ -28,8 +28,10 @@ SCENARIOS = {
 
         "with_battery_storage": False,
         "with_interconnectors": False,
-        "with_gas_network": False,
-        "with_h2_turbine": False,
+
+        "with_ch4_network": False,
+        "with_h2_network": False,
+
         "with_heat_sector": False,
         "with_heat_storage": False,
 
@@ -47,8 +49,10 @@ SCENARIOS = {
 
         "with_battery_storage": True,
         "with_interconnectors": False,
-        "with_gas_network": False,
-        "with_h2_turbine": False,
+
+        "with_ch4_network": False,
+        "with_h2_network": False,
+
         "with_heat_sector": False,
         "with_heat_storage": False,
 
@@ -64,10 +68,12 @@ SCENARIOS = {
         "weather_year": "2016",
         "countries": ["DK", "DE", "SE", "NO"],
 
-        "with_battery_storage": True,
+        "with_battery_storage": False,
         "with_interconnectors": True,
-        "with_gas_network": False,
-        "with_h2_turbine": False,
+
+        "with_ch4_network": False,
+        "with_h2_network": False,
+
         "with_heat_sector": False,
         "with_heat_storage": False,
 

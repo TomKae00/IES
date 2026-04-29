@@ -55,14 +55,14 @@ def plot_denmark_dispatch_strategy(n, folder):
 
     # Optional: include storage discharge/charge if your model uses links
     # Battery charging is demand-like, battery discharging is supply-like
-    if "DK_battery_discharger" in n.links.index:
-        generation_by_carrier["battery_discharge"] = n.links_t.p1["DK_battery_discharger"].loc[week_index].clip(lower=0)
+    #if "DK_battery_discharger" in n.links.index:
+    #    generation_by_carrier["battery_discharge"] = n.links_t.p1["DK_battery_discharger"].loc[week_index].clip(lower=0)
 
-    battery_charge = pd.Series(0.0, index=week_index)
-    if "DK_battery_charger" in n.links.index:
-        # charging consumes power from DK bus
-        # depending on model convention p0 may already be positive when consuming
-        battery_charge = n.links_t.p0["DK_battery_charger"].loc[week_index].clip(lower=0)
+    #battery_charge = pd.Series(0.0, index=week_index)
+    #if "DK_battery_charger" in n.links.index:
+    #    # charging consumes power from DK bus
+    #    # depending on model convention p0 may already be positive when consuming
+    #    battery_charge = n.links_t.p0["DK_battery_charger"].loc[week_index].clip(lower=0)
 
     # -----------------------------
     # 2. Imports/exports by neighbour

@@ -3,6 +3,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 import pypsa
+import seaborn as sns
 
 from interconnectors_analyze import load_network
 
@@ -523,6 +524,64 @@ def plot_installed_capacity_by_weather_years(
     plt.close(fig)
 
 
+def plot_capacity_boxplot(
+    capacity_by_year: pd.DataFrame,
+    output_path: Path,
+) -> None:
+    """
+    Box plot of optimized installed capacity per generator across weather years.
+
+    Each box shows the spread of one generator's capacity across the available
+    weather years (one observation per year).
+    """
+    df = capacity_by_year.copy()
+    if "generator" in df.columns:
+        df = df.set_index("generator")
+
+    df.columns = pd.to_numeric(df.columns, errors="coerce")
+    df = df.loc[:, df.columns.notna()]
+
+    # Order generators by descending mean capacity so the most important ones appear first
+    ordered = df.mean(axis=1).sort_values(ascending=False).index
+    df = df.loc[ordered]
+
+    long_df = df.reset_index().melt(id_vars="generator", var_name="year", value_name="capacity_mw")
+
+    n_generators = len(df.index)
+    palette = sns.color_palette("Blues_d", n_colors=n_generators)
+
+    sns.set_theme(style="whitegrid", font_scale=1.1)
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    sns.boxplot(
+        data=long_df,
+        x="generator",
+        y="capacity_mw",
+        hue="generator",
+        order=list(ordered),
+        palette=palette,
+        linewidth=1.4,
+        flierprops=dict(marker="o", markerfacecolor="steelblue", markeredgecolor="white",
+                        markersize=6, alpha=0.7),
+        legend=False,
+        ax=ax,
+    )
+
+    ax.set_title("Optimized installed capacity across weather years", fontsize=14, weight="semibold", pad=12)
+    ax.set_ylabel("Installed capacity [MW]", fontsize=12)
+    ax.set_xlabel("Generator", fontsize=12)
+    ax.tick_params(axis="x", labelrotation=30, labelsize=10)
+    ax.tick_params(axis="y", labelsize=10)
+    plt.setp(ax.get_xticklabels(), ha="right")
+
+    sns.despine(ax=ax)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    sns.reset_defaults()
+
+
 def plot_installed_capacity_by_generator(df: pd.DataFrame, output_path: str | None = None, generator_order: list[str] | None = None):
     """
     Plot installed capacity by generator with one line per weather year.
@@ -677,6 +736,11 @@ def main() -> None:
         plot_installed_capacity_by_weather_years(
             capacity_by_year,
             output_dir,
+        )
+
+        plot_capacity_boxplot(
+            capacity_by_year,
+            output_path=Path("../results/interannual_sensitivity/part_b_box_plot_capacity.png"),
         )
 
         # Convert to long format for per-generator line plot by weather year

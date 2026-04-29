@@ -482,7 +482,7 @@ def main():
     with_battery_storage = True
     with_interconnectors = True
 
-    network_file = "results/regional_network_2016.nc"
+    network_file = "results/networks/interconnected_2016.nc"
     n = load_network(network_file)
 
     folder = create_analysis_folder()

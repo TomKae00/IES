@@ -68,7 +68,7 @@ SCENARIOS = {
         "weather_year": "2016",
         "countries": ["DK", "DE", "SE", "NO"],
 
-        "with_battery_storage": False,
+        "with_battery_storage": True,
         "with_interconnectors": True,
 
         "with_ch4_network": False,

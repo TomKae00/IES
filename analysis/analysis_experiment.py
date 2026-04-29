@@ -198,29 +198,29 @@ def add_electricity(
         # -----------------------------
         # Offshore wind
         # -----------------------------
-        #if country_code == "DK":
-         #   n.add(
-         #       "Generator",
-         #       f"{country_code}_offshore_wind",
-         #       bus=country_code,
-         #       carrier="offwind",
-         #       p_nom_extendable=True,
-         #       p_nom_max=2.650,
-         #       p_max_pu=timeseries_data["offshore_wind_cf"],
-         #       capital_cost=cost_data.at["offwind", "fixed"],
-         #       marginal_cost=cost_data.at["offwind", "VOM"],
-         #       )
-        #else:
-        n.add(
-            "Generator",
-            f"{country_code}_offshore_wind",
-            bus=country_code,
-            carrier="offwind",
-            p_nom_extendable=True,
-            p_max_pu=timeseries_data["offshore_wind_cf"],
-            capital_cost=cost_data.at["offwind", "fixed"],
-            marginal_cost=cost_data.at["offwind", "VOM"],
-        )
+        if country_code == "DK":
+            n.add(
+                "Generator",
+                f"{country_code}_offshore_wind",
+                bus=country_code,
+                carrier="offwind",
+                p_nom_extendable=True,
+                p_nom_max=2650,
+                p_max_pu=timeseries_data["offshore_wind_cf"],
+                capital_cost=cost_data.at["offwind", "fixed"],
+                marginal_cost=cost_data.at["offwind", "VOM"],
+                )
+        else:
+            n.add(
+                "Generator",
+                f"{country_code}_offshore_wind",
+                bus=country_code,
+                carrier="offwind",
+                p_nom_extendable=True,
+                p_max_pu=timeseries_data["offshore_wind_cf"],
+                capital_cost=cost_data.at["offwind", "fixed"],
+                marginal_cost=cost_data.at["offwind", "VOM"],
+            )
 
         # -----------------------------
         # CCGT
@@ -607,7 +607,6 @@ def add_gas(
         if with_h2_network:
             h2_tech_name = "H2 (g) pipeline"
 
-            h2_capital_cost = cost_data.at[h2_tech_name, "fixed"] * length_km
             h2_electricity_input = cost_data.at[h2_tech_name, "electricity-input"]
 
             h2_efficiency = 1.0 - h2_electricity_input * length_km / 1000.0
@@ -1127,6 +1126,21 @@ def print_model_summary(n: pypsa.Network) -> None:
 # PLOTS
 # =========================================================
 
+def get_carrier_colors(n: pypsa.Network, columns: pd.Index) -> list[str]:
+    """
+    Return colors for carriers based on n.carriers['color'].
+    """
+    fallback_color = "#999999"
+    colors = []
+
+    for carrier in columns:
+        if carrier in n.carriers.index and pd.notna(n.carriers.at[carrier, "color"]):
+            colors.append(n.carriers.at[carrier, "color"])
+        else:
+            colors.append(fallback_color)
+
+    return colors
+
 def plot_denmark_dispatch_strategy(n, folder):
     """
     Plot Denmark dispatch during the winter week with highest average
@@ -1425,6 +1439,221 @@ def plot_denmark_dispatch_strategy(n, folder):
     plt.close()
 
 
+def plot_annual_mix_from_balance(n: pypsa.Network, output_dir: Path) -> None:
+    """
+    Plot annual Danish electricity mix only.
+    """
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    annual_mix = {}
+
+    # -----------------------------
+    # 1. DK generators
+    # -----------------------------
+    dk_generators = n.generators[n.generators.bus == "DK"]
+
+    for gen in dk_generators.index:
+        carrier = n.generators.at[gen, "carrier"]
+
+        generation = n.generators_t.p[gen].clip(lower=0).sum()
+
+        annual_mix[carrier] = annual_mix.get(carrier, 0.0) + generation
+
+    # -----------------------------
+    # 2. Links producing electricity into DK
+    # -----------------------------
+    dk_electricity_links = n.links[n.links.bus1 == "DK"]
+
+    for link in dk_electricity_links.index:
+        carrier = n.links.at[link, "carrier"]
+
+        output_to_dk = (-n.links_t.p1[link]).clip(lower=0).sum()
+
+        annual_mix[carrier] = annual_mix.get(carrier, 0.0) + output_to_dk
+
+    annual_mix = pd.Series(annual_mix)
+
+    # -----------------------------
+    # Remove very small numerical values
+    # -----------------------------
+    tolerance = 1e-3
+    annual_mix = annual_mix[annual_mix > tolerance]
+
+    # -----------------------------
+    # Optional: manually exclude onshore wind
+    # -----------------------------
+    annual_mix = annual_mix.drop("onwind", errors="ignore")
+
+    # -----------------------------
+    # Get colors BEFORE renaming
+    # -----------------------------
+    colors = get_carrier_colors(n, annual_mix.index)
+
+    # -----------------------------
+    # Nice labels for legend
+    # -----------------------------
+    label_map = {
+        "solar": "solar PV",
+        "onwind": "onshore wind",
+        "offwind": "offshore wind",
+        "gas CCGT": "gas CCGT",
+        "CCGT": "gas CCGT",
+        "coal": "coal",
+        "nuclear": "nuclear",
+        "battery discharger": "battery discharge",
+        "H2 turbine": "H2 turbine",
+        "H2 fuel cell": "H2 fuel cell",
+    }
+
+    labels = [label_map.get(carrier, carrier) for carrier in annual_mix.index]
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+
+    wedges, texts, autotexts = ax.pie(
+        annual_mix,
+        colors=colors,
+        labels=None,
+        autopct="%1.1f%%",
+        startangle=90,
+        wedgeprops={"edgecolor": "white"},
+        textprops={"color": "black"},
+    )
+
+    ax.legend(
+        wedges,
+        labels,
+        title="Technology",
+        loc="lower right",
+        bbox_to_anchor=(1, 0),
+        fontsize=10,
+    )
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "annual_danish_electricity_mix.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_capacity_factors_over_year(n: pypsa.Network, output_dir: Path) -> None:
+    """
+    Plot monthly capacity factors for selected Danish electricity technologies.
+    Includes both generators and gas/H2/battery links producing electricity into DK.
+    """
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    weights = n.snapshot_weightings.generators
+
+    monthly_cf = {}
+
+    # -----------------------------
+    # 1. Danish generators
+    # -----------------------------
+    generator_carriers = ["solar", "offwind", "coal", "nuclear", "gas CCGT"]
+
+    gens = n.generators.index[
+        (n.generators.bus == "DK")
+        & (n.generators.carrier.isin(generator_carriers))
+    ]
+
+    for gen in gens:
+        carrier = n.generators.at[gen, "carrier"]
+        capacity = n.generators.at[gen, "p_nom_opt"]
+
+        if capacity <= 1e-6:
+            continue
+
+        generation = n.generators_t.p[gen].clip(lower=0)
+        monthly_generation = generation.multiply(weights, axis=0).resample("ME").sum()
+        monthly_hours = weights.resample("ME").sum()
+
+        cf = monthly_generation / (capacity * monthly_hours)
+        monthly_cf[carrier] = cf
+
+    # -----------------------------
+    # 2. Danish electricity-producing links
+    # -----------------------------
+    link_map = {
+        "DK_CCGT": "gas CCGT",
+        "DK_H2_turbine": "H2 turbine",
+        "DK_H2_fuel_cell": "H2 fuel cell",
+        "DK_battery_discharger": "battery discharge",
+    }
+
+    for link, label in link_map.items():
+        if link not in n.links.index:
+            continue
+
+        capacity = n.links.at[link, "p_nom_opt"]
+
+        if capacity <= 1e-6:
+            continue
+
+        # p1 is negative when output is delivered to DK
+        output = (-n.links_t.p1[link]).clip(lower=0)
+
+        monthly_output = output.multiply(weights, axis=0).resample("ME").sum()
+        monthly_hours = weights.resample("ME").sum()
+
+        cf = monthly_output / (capacity * monthly_hours)
+        monthly_cf[label] = cf
+
+    cf = pd.DataFrame(monthly_cf)
+
+    cf = cf.loc[:, cf.max() > 1e-6]
+
+    color_keys = {
+        "solar": "solar",
+        "offwind": "offwind",
+        "coal": "coal",
+        "nuclear": "nuclear",
+        "gas CCGT": "CCGT",
+        "H2 turbine": "H2 turbine",
+        "H2 fuel cell": "H2 fuel cell",
+        "battery discharge": "battery discharger",
+    }
+
+    label_map = {
+        "solar": "solar PV",
+        "offwind": "offshore wind",
+        "coal": "coal",
+        "nuclear": "nuclear",
+        "gas CCGT": "gas CCGT",
+        "H2 turbine": "H2 turbine",
+        "H2 fuel cell": "H2 fuel cell",
+        "battery discharge": "battery discharge",
+    }
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+
+    for column in cf.columns:
+        carrier_key = color_keys.get(column, column)
+
+        if carrier_key in n.carriers.index:
+            color = n.carriers.at[carrier_key, "color"]
+        else:
+            color = "#999999"
+
+        ax.plot(
+            cf.index,
+            cf[column],
+            label=label_map.get(column, column),
+            color=color,
+            linewidth=2,
+        )
+
+    ax.set_ylabel("Capacity factor [-]")
+    ax.set_xlabel("")
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend(loc="center left", bbox_to_anchor=(1, 0.5), title="Technology")
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "capacity_factors_over_year_dk.png", dpi=300)
+    plt.close(fig)
+
+
 # =========================================================
 # RUN MODEL
 # =========================================================
@@ -1484,6 +1713,15 @@ def main() -> None:
     plot_denmark_dispatch_strategy(
         n=n,
         folder=Path("results/experiments")
+    )
+    plot_annual_mix_from_balance(
+        n=n,
+        output_dir=Path("results/experiments"),
+    )
+
+    plot_capacity_factors_over_year(
+        n=n,
+        output_dir=Path("results/experiments"),
     )
 
 if __name__ == "__main__":

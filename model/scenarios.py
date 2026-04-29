@@ -155,8 +155,8 @@ SCENARIOS = {
         "with_heat_sector": True,
         "with_heat_storage": True,
 
-        "co2_price": 80.0,
-        "co2_limit": None,
+        "co2_price": 0.0,
+        "co2_limit": 603779863.8428456 * 0.3,
     },
 
     # -----------------------------------------------------

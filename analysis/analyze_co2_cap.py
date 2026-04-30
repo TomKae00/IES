@@ -23,7 +23,9 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
+import matplotlib.pyplot as plt
 import pypsa
+import numpy as np
 
 from model.helpers import (
     silence_gurobi_logger,
@@ -556,7 +558,6 @@ def add_gas(
         if with_ch4_network:
             ch4_tech_name = "CH4 (g) pipeline"
 
-            ch4_capital_cost = cost_data.at[ch4_tech_name, "fixed"] * length_km
             ch4_electricity_input = cost_data.at[ch4_tech_name, "electricity-input"]
 
             ch4_efficiency = 1.0 - ch4_electricity_input * length_km / 1000.0
@@ -592,7 +593,6 @@ def add_gas(
         if with_h2_network:
             h2_tech_name = "H2 (g) pipeline"
 
-            h2_capital_cost = cost_data.at[h2_tech_name, "fixed"] * length_km
             h2_electricity_input = cost_data.at[h2_tech_name, "electricity-input"]
 
             h2_efficiency = 1.0 - h2_electricity_input * length_km / 1000.0
@@ -862,6 +862,464 @@ def create_network(
     return n
 
 # =========================================================
+# PLOTS
+# =========================================================
+
+def get_carrier_colors(n: pypsa.Network, columns: pd.Index) -> list[str]:
+    fallback_color = "#999999"
+    colors = []
+
+    color_key = {
+        "gas CCGT": "CCGT",
+        "battery discharge": "battery discharger",
+        "battery charge": "battery charger",
+    }
+
+    for carrier in columns:
+        key = color_key.get(carrier, carrier)
+
+        if key in n.carriers.index and pd.notna(n.carriers.at[key, "color"]):
+            colors.append(n.carriers.at[key, "color"])
+        else:
+            colors.append(fallback_color)
+
+    return colors
+
+
+def carrier_order(columns):
+    preferred_order = [
+        "nuclear",
+        "coal",
+        "gas CCGT",
+        "CCGT",
+        "offwind",
+        "onwind",
+        "solar",
+        "H2 turbine",
+        "H2 fuel cell",
+        "battery discharger",
+        "battery discharge",
+    ]
+
+    return [c for c in preferred_order if c in columns] + [
+        c for c in columns if c not in preferred_order
+    ]
+
+
+def plot_weekly_dispatch(
+    n: pypsa.Network,
+    output_dir: Path,
+    week_start: str = "2016-01-01",
+    title: str = "Weekly dispatch in interconnected system",
+    FIND_BASELINE: bool = False
+) -> None:
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    week_start = pd.to_datetime(week_start)
+    week_end = week_start + pd.Timedelta(days=7)
+
+    week_index = n.snapshots[
+        (n.snapshots >= week_start) & (n.snapshots < week_end)
+    ]
+
+    if len(week_index) == 0:
+        print(f"No snapshots found for week starting {week_start}")
+        return
+
+    ac_buses = n.buses.index[n.buses.carrier == "AC"]
+
+    dispatch_by_carrier = {}
+
+    # -----------------------------
+    # Generators on AC buses
+    # -----------------------------
+    generators = n.generators[n.generators.bus.isin(ac_buses)]
+
+    for gen in generators.index:
+        carrier = n.generators.at[gen, "carrier"]
+
+        dispatch_by_carrier.setdefault(
+            carrier, pd.Series(0.0, index=week_index)
+        )
+
+        dispatch_by_carrier[carrier] += (
+            n.generators_t.p[gen].loc[week_index].clip(lower=0)
+        )
+
+    # -----------------------------
+    # Links producing electricity into AC buses
+    # -----------------------------
+    electricity_links = n.links[n.links.bus1.isin(ac_buses)]
+
+    for link in electricity_links.index:
+        carrier = n.links.at[link, "carrier"]
+
+        if carrier in ["battery charger", "electrolysis"]:
+            continue
+
+        dispatch_by_carrier.setdefault(
+            carrier, pd.Series(0.0, index=week_index)
+        )
+
+        dispatch_by_carrier[carrier] += (
+            -n.links_t.p1[link].loc[week_index]
+        ).clip(lower=0)
+
+    dispatch = pd.DataFrame(dispatch_by_carrier)
+    dispatch = dispatch.loc[:, dispatch.sum() > 1e-6]
+    dispatch = dispatch[carrier_order(dispatch.columns)]
+
+    # Total electricity demand in all countries
+    electricity_loads = n.loads[
+        n.loads.bus.isin(ac_buses)
+        & n.loads.index.str.contains("electricity_demand")
+    ]
+
+    total_demand = pd.Series(0.0, index=week_index)
+
+    for load in electricity_loads.index:
+        total_demand += n.loads_t.p_set[load].loc[week_index]
+
+    colors = get_carrier_colors(n, dispatch.columns)
+
+    fig, ax = plt.subplots(figsize=(13, 5))
+
+    dispatch.plot.area(
+        ax=ax,
+        stacked=True,
+        linewidth=0,
+        color=colors,
+        alpha=0.85,
+    )
+
+    ax.plot(
+        week_index,
+        total_demand,
+        color="black",
+        linewidth=2.2,
+        label="Electricity demand",
+    )
+
+    ax.set_title(title)
+    ax.set_ylabel("Power [MW]")
+    ax.set_xlabel("")
+    ax.grid(alpha=0.3)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), title="Technology")
+
+    fig.tight_layout()
+
+    if FIND_BASELINE:
+        fig.savefig(
+            output_dir / "weekly_dispatch_interconnected_system_base.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+    else:
+        fig.savefig(
+            output_dir / "weekly_dispatch_interconnected_system.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    plt.close(fig)
+
+
+def plot_annual_mix_from_balance(
+    n: pypsa.Network,
+    output_dir: Path,
+    FIND_BASELINE: bool = False
+) -> None:
+    """
+    Plot annual electricity mix for the full interconnected system.
+    Includes all countries and all electricity-producing technologies.
+    """
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    ac_buses = n.buses.index[n.buses.carrier == "AC"]
+
+    annual_mix = {}
+
+    # -----------------------------
+    # Generators on AC buses
+    # -----------------------------
+    generators = n.generators[n.generators.bus.isin(ac_buses)]
+
+    for gen in generators.index:
+        carrier = n.generators.at[gen, "carrier"]
+        generation = n.generators_t.p[gen].clip(lower=0).sum()
+
+        annual_mix[carrier] = annual_mix.get(carrier, 0.0) + generation
+
+    # -----------------------------
+    # Links producing electricity into AC buses
+    # -----------------------------
+    electricity_links = n.links[n.links.bus1.isin(ac_buses)]
+
+    for link in electricity_links.index:
+        carrier = n.links.at[link, "carrier"]
+
+        if carrier in ["battery charger", "electrolysis"]:
+            continue
+
+        output = (-n.links_t.p1[link]).clip(lower=0).sum()
+
+        annual_mix[carrier] = annual_mix.get(carrier, 0.0) + output
+
+    annual_mix = pd.Series(annual_mix)
+    annual_mix = annual_mix[annual_mix > 1e-3]
+    annual_mix = annual_mix[carrier_order(annual_mix.index)]
+
+    colors = get_carrier_colors(n, annual_mix.index)
+
+    label_map = {
+        "solar": "Solar PV",
+        "onwind": "Onshore wind",
+        "offwind": "Offshore wind",
+        "coal": "Coal",
+        "nuclear": "Nuclear",
+        "CCGT": "Gas CCGT",
+        "gas CCGT": "Gas CCGT",
+        "battery discharger": "Battery discharge",
+        "H2 turbine": "H2 turbine",
+        "H2 fuel cell": "H2 fuel cell",
+    }
+
+    labels = [label_map.get(carrier, carrier) for carrier in annual_mix.index]
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+
+    wedges, texts, autotexts = ax.pie(
+        annual_mix,
+        colors=colors,
+        labels=None,
+        autopct="%1.1f%%",
+        startangle=90,
+        wedgeprops={"edgecolor": "white"},
+        textprops={"color": "black"},
+    )
+
+    ax.legend(
+        wedges,
+        labels,
+        title="Technology",
+        loc="lower right",
+        bbox_to_anchor=(1, 0),
+        fontsize=9,
+    )
+
+    ax.set_title("Annual electricity mix in interconnected system")
+
+    fig.tight_layout()
+    if FIND_BASELINE:
+        fig.savefig(
+            output_dir / "annual_electricity_mix_interconnected_system_base.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+    else:
+        fig.savefig(
+            output_dir / "annual_electricity_mix_interconnected_system.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+    plt.close(fig)
+
+
+def plot_denmark_dispatch_strategy(
+    n: pypsa.Network,
+    folder: Path,
+    FIND_BASELINE: bool = False,
+) -> None:
+
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    snapshots = n.snapshots
+    winter_mask = (snapshots.month == 12) | (snapshots.month == 1)
+
+    dk_load = n.loads_t.p_set["DK_electricity_demand"]
+    winter_load = dk_load[winter_mask]
+
+    weekly_avg_load = winter_load.resample("W").mean()
+    max_load_week_end = weekly_avg_load.idxmax()
+
+    week_start = max_load_week_end - pd.Timedelta(days=6)
+    week_end = max_load_week_end
+
+    week_index = dk_load.loc[week_start:week_end].index
+    week_load = dk_load.loc[week_index]
+
+    # -----------------------------
+    # Danish electricity supply
+    # -----------------------------
+    supply = {}
+
+    dk_generators = n.generators[n.generators.bus == "DK"]
+
+    for gen in dk_generators.index:
+        carrier = n.generators.at[gen, "carrier"]
+
+        supply.setdefault(carrier, pd.Series(0.0, index=week_index))
+        supply[carrier] += n.generators_t.p[gen].loc[week_index].clip(lower=0)
+
+    dk_output_links = n.links[n.links.bus1 == "DK"]
+
+    for link in dk_output_links.index:
+        carrier = n.links.at[link, "carrier"]
+
+        supply.setdefault(carrier, pd.Series(0.0, index=week_index))
+        supply[carrier] += (-n.links_t.p1[link].loc[week_index]).clip(lower=0)
+
+    supply = pd.DataFrame(supply)
+    supply = supply.loc[:, supply.sum() > 1e-6]
+    supply = supply[carrier_order(supply.columns)]
+
+    # -----------------------------
+    # Danish electricity-consuming links
+    # -----------------------------
+    consumption = {}
+
+    dk_consuming_links = n.links[n.links.bus0 == "DK"]
+
+    for link in dk_consuming_links.index:
+        carrier = n.links.at[link, "carrier"]
+
+        if carrier not in ["battery charger", "electrolysis"]:
+            continue
+
+        consumption[carrier] = n.links_t.p0[link].loc[week_index].clip(lower=0)
+
+    # -----------------------------
+    # Imports / exports
+    # -----------------------------
+    exchanges = {}
+
+    dk_lines = n.lines[(n.lines.bus0 == "DK") | (n.lines.bus1 == "DK")]
+
+    for line in dk_lines.index:
+        bus0 = n.lines.at[line, "bus0"]
+        bus1 = n.lines.at[line, "bus1"]
+
+        neighbour = bus1 if bus0 == "DK" else bus0
+        flow = n.lines_t.p0[line].loc[week_index]
+
+        if bus0 == "DK":
+            dk_exchange = -flow
+        else:
+            dk_exchange = flow
+
+        exchanges[neighbour] = dk_exchange
+
+    print("\nDK electricity exchange during plotted week:")
+    for neighbour, series in exchanges.items():
+        print(
+            f"{neighbour}: "
+            f"min={series.min():.2f} MW, "
+            f"max={series.max():.2f} MW, "
+            f"mean={series.mean():.2f} MW"
+        )
+
+    # -----------------------------
+    # Plot
+    # -----------------------------
+    fig, (ax1, ax2) = plt.subplots(
+        2,
+        1,
+        figsize=(14, 8),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3, 1]},
+    )
+
+    colors = get_carrier_colors(n, supply.columns)
+
+    bottom = np.zeros(len(week_index))
+
+    for carrier, color in zip(supply.columns, colors):
+        values = supply[carrier].fillna(0).values
+
+        ax1.fill_between(
+            week_index,
+            bottom,
+            bottom + values,
+            color=color,
+            alpha=0.85,
+            label=carrier,
+            linewidth=0,
+        )
+
+        bottom += values
+
+    ax1.plot(
+        week_index,
+        week_load.values,
+        color="black",
+        linewidth=2.3,
+        label="DK electricity demand",
+        zorder=10,
+    )
+
+    for carrier, series in consumption.items():
+        ax1.plot(
+            week_index,
+            -series.values,
+            linestyle="--",
+            linewidth=1.8,
+            label=carrier,
+            zorder=10,
+        )
+
+    ax1.axhline(0, color="black", linewidth=0.8)
+    ax1.set_ylabel("Power [MW]")
+    ax1.set_title("Denmark dispatch strategy during peak winter week")
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(loc="upper left", bbox_to_anchor=(1.01, 1), title="Technology")
+
+    # -----------------------------
+    # Exchange subplot
+    # -----------------------------
+    exchange_colors = {
+        "NO": "#1f77b4",
+        "SE": "#ff7f0e",
+        "DE": "#2ca02c",
+    }
+
+    for neighbour, series in exchanges.items():
+        ax2.plot(
+            week_index,
+            series.values,
+            linewidth=2.5,
+            label=neighbour,
+            color=exchange_colors.get(neighbour),
+            zorder=10,
+        )
+
+    ax2.axhline(0, color="black", linewidth=1)
+    ax2.set_ylabel("Import / export [MW]")
+    ax2.set_xlabel("Time")
+    ax2.grid(True, alpha=0.3)
+
+    if exchanges:
+        max_abs_exchange = max(series.abs().max() for series in exchanges.values())
+        ax2.set_ylim(-1.15 * max_abs_exchange, 1.15 * max_abs_exchange)
+        ax2.legend(title="Exchange", loc="upper left", bbox_to_anchor=(1.01, 1))
+
+    plt.xticks(rotation=45)
+    fig.tight_layout()
+
+    if FIND_BASELINE:
+        outfile = folder / "denmark_dispatch_strategy_winter_week_base.png"
+    else:
+        outfile = folder / "denmark_dispatch_strategy_winter_week.png"
+
+    fig.savefig(outfile, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+# =========================================================
 # SOLVING AND EXPORT
 # =========================================================
 
@@ -943,7 +1401,7 @@ def print_model_summary(n: pypsa.Network, cap: float) -> None:
 def main() -> None:
     silence_gurobi_logger()
 
-    FIND_BASELINE = False  # Set to False to run the CO2 cap scenario instead of the baseline
+    FIND_BASELINE = True # Set to False to run the CO2 cap scenario instead of the baseline
 
     scenario = SCENARIOS[ACTIVE_SCENARIO].copy()
 
@@ -990,6 +1448,25 @@ def main() -> None:
     print_model_summary(
         n,
         cap=None if FIND_BASELINE else scenario["co2_cap"],
+    )
+
+    plot_weekly_dispatch(
+        n=n,
+        output_dir=Path("results/co2_cap"),
+        week_start=f"{scenario['weather_year']}-01-01",
+        FIND_BASELINE=FIND_BASELINE
+    )
+
+    plot_annual_mix_from_balance(
+        n=n,
+        output_dir=Path("results/co2_cap"),
+        FIND_BASELINE=FIND_BASELINE
+    )
+
+    plot_denmark_dispatch_strategy(
+        n=n,
+        folder=Path("results/co2_cap"),
+        FIND_BASELINE=FIND_BASELINE
     )
 
 

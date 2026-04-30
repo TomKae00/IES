@@ -23,7 +23,7 @@ SCENARIOS = {
     # -----------------------------------------------------
     "base": {
         "name": "base_DK",
-        "weather_year": "2016",
+        "weather_year": "2019",
         "countries": ["DK"],
 
         "with_battery_storage": False,

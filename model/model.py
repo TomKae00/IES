@@ -364,8 +364,8 @@ def add_interconnectors(n: pypsa.Network) -> None:
             s_nom=capacity,
             s_nom_extendable=False,
             x=0.1,
-            r=0.1,
-            #v_nom=400.0,
+            #r=0.1,
+            v_nom=400.0,
         )
 
 

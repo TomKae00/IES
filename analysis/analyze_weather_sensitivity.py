@@ -4,24 +4,43 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pypsa
 
+from model.helpers import load_country_timeseries
+from model.scenarios import FILE_PATHS
 
-NETWORK_DIR = Path("results")
-TIMESERIES_FILE = ("Data/time_series_60min_singleindex_filtered_2015-2020.csv")
-OUTPUT_DIR = Path("results/weather_sensitivity_analysis")
+
+# =========================================================
+# CONFIG
+# =========================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+NETWORK_DIR = PROJECT_ROOT / "results" / "networks"
+OUTPUT_DIR = PROJECT_ROOT / "results" / "weather_sensitivity_analysis"
+
+TIMESERIES_FILE = PROJECT_ROOT / FILE_PATHS["timeseries_file"]
 
 YEARS = [2015, 2016, 2017, 2018, 2019]
 COUNTRY_CODE = "DK"
 
-# Map report-friendly technology names to possible carrier names in the PyPSA networks
+# This matches your saved files:
+# /home/tom/PycharmProjects/IES/results/networks/base_DK_2015.nc
+# /home/tom/PycharmProjects/IES/results/networks/base_DK_2016.nc
+# ...
+NETWORK_NAME_TEMPLATE = "base_DK_{year}.nc"
+
 CARRIER_ALIASES = {
     "solar": ["solar"],
     "onshore wind": ["onwind", "onshore wind", "wind_onshore", "onshore"],
     "offshore wind": ["offwind", "offshore wind", "wind_offshore", "offshore"],
-    "CCGT": ["CCGT", "ccgt", "gas"],
+    "CCGT": ["gas CCGT", "CCGT", "ccgt", "gas"],
     "coal": ["coal"],
     "nuclear": ["nuclear"],
 }
 
+
+# =========================================================
+# HELPERS
+# =========================================================
 
 def ensure_output_dir(path: Path) -> None:
     """
@@ -30,86 +49,16 @@ def ensure_output_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def load_country_timeseries(
-    timeseries_file: str,
-    country_code: str,
-    year: str,
-) -> dict:
+def get_network_path(network_dir: Path, year: int) -> Path:
     """
-    Load electricity demand and renewable generation data for one country and
-    compute capacity factors for solar, onshore wind and offshore wind.
-
-    Missing technologies are returned as zero time series.
-
-    Parameters
-    ----------
-    timeseries_file : str
-        Path to the CSV file containing hourly electricity data.
-    country_code : str
-        Country code used in the column names, e.g. "DK", "DE", "SE", "NO".
-    year : str
-        Year to extract from the dataset.
-
-    Returns
-    -------
-    dict
-        Dictionary containing electricity demand and renewable capacity
-        factor time series for the selected country.
+    Return the expected solved network path for one weather year.
     """
-    raw_timeseries = pd.read_csv(timeseries_file)
+    return network_dir / NETWORK_NAME_TEMPLATE.format(year=year)
 
-    raw_timeseries["utc_timestamp"] = pd.to_datetime(
-        raw_timeseries["utc_timestamp"], utc=True
-    )
-    raw_timeseries = raw_timeseries.set_index("utc_timestamp")
-    raw_timeseries.index = raw_timeseries.index.tz_localize(None)
 
-    yearly_timeseries = raw_timeseries.loc[f"{year}-01-01":f"{year}-12-31"]
-
-    electricity_load = yearly_timeseries[
-        f"{country_code}_load_actual_entsoe_transparency"
-    ].copy()
-
-    zero_series = pd.Series(0.0, index=yearly_timeseries.index)
-
-    def capacity_factor_from_columns(
-        generation_column: str,
-        capacity_column: str,
-    ) -> pd.Series:
-        if (
-            generation_column in yearly_timeseries.columns
-            and capacity_column in yearly_timeseries.columns
-        ):
-            capacity = yearly_timeseries[capacity_column].replace(0, pd.NA)
-            return (
-                yearly_timeseries[generation_column] / capacity
-            ).fillna(0.0).clip(0.0, 1.0)
-        return zero_series.copy()
-
-    solar_capacity_factor = capacity_factor_from_columns(
-        generation_column=f"{country_code}_solar_generation_actual",
-        capacity_column=f"{country_code}_solar_capacity",
-    )
-
-    onshore_wind_capacity_factor = capacity_factor_from_columns(
-        generation_column=f"{country_code}_wind_onshore_generation_actual",
-        capacity_column=f"{country_code}_wind_onshore_capacity",
-    )
-
-    offshore_wind_capacity_factor = capacity_factor_from_columns(
-        generation_column=f"{country_code}_wind_offshore_generation_actual",
-        capacity_column=f"{country_code}_wind_offshore_capacity",
-    )
-
-    timeseries_data = {
-        "load": electricity_load,
-        "solar_cf": solar_capacity_factor,
-        "onshore_wind_cf": onshore_wind_capacity_factor,
-        "offshore_wind_cf": offshore_wind_capacity_factor,
-    }
-
-    return timeseries_data
-
+# =========================================================
+# CAPACITY ANALYSIS
+# =========================================================
 
 def extract_generator_capacities(
     network_path: Path,
@@ -132,13 +81,34 @@ def extract_generator_capacities(
         Optimized capacities in MW for the requested technologies.
     """
     network = pypsa.Network(network_path)
+
+    if network.generators.empty:
+        return pd.Series(
+            {technology: 0.0 for technology in carrier_aliases},
+            dtype=float,
+        )
+
+    if "p_nom_opt" not in network.generators.columns:
+        raise KeyError(
+            f"'p_nom_opt' not found in generators of {network_path}. "
+            "Make sure the network was optimized before saving."
+        )
+
     capacities_by_carrier = network.generators.groupby("carrier")["p_nom_opt"].sum()
 
     extracted_capacities = {}
 
     for technology, aliases in carrier_aliases.items():
-        matching_aliases = [alias for alias in aliases if alias in capacities_by_carrier.index]
-        extracted_capacities[technology] = capacities_by_carrier.loc[matching_aliases].sum()
+        matching_aliases = [
+            alias for alias in aliases if alias in capacities_by_carrier.index
+        ]
+
+        if matching_aliases:
+            extracted_capacities[technology] = capacities_by_carrier.loc[
+                matching_aliases
+            ].sum()
+        else:
+            extracted_capacities[technology] = 0.0
 
     return pd.Series(extracted_capacities, dtype=float)
 
@@ -159,15 +129,23 @@ def build_capacity_table(
     rows = []
 
     for year in years:
-        network_path = network_dir / f"dk_base_battery_network_{year}.nc"
+        network_path = get_network_path(
+            network_dir=network_dir,
+            year=year,
+        )
 
         if not network_path.exists():
-            raise FileNotFoundError(f"Network file not found: {network_path}")
+            raise FileNotFoundError(
+                f"Network file not found: {network_path}\n"
+                f"Expected filename pattern: {NETWORK_NAME_TEMPLATE}\n"
+                "Make sure you have run and saved all weather-year networks first."
+            )
 
         capacities = extract_generator_capacities(
             network_path=network_path,
             carrier_aliases=carrier_aliases,
         )
+
         capacities.name = year
         rows.append(capacities)
 
@@ -177,6 +155,10 @@ def build_capacity_table(
     return capacity_df
 
 
+# =========================================================
+# CAPACITY FACTOR ANALYSIS
+# =========================================================
+
 def build_cf_summary(
     timeseries_file: str,
     country_code: str,
@@ -184,6 +166,11 @@ def build_cf_summary(
 ) -> pd.DataFrame:
     """
     Build yearly summary statistics for renewable capacity factors and load.
+
+    The function uses the shared model helper, so it follows the same logic as
+    the model:
+    - electricity demand is fixed to 2016 and mapped to the selected year
+    - renewable capacity factors use the selected weather year
 
     Returns
     -------
@@ -206,8 +193,8 @@ def build_cf_summary(
                 "onshore_wind_cf_mean": timeseries_data["onshore_wind_cf"].mean(),
                 "offshore_wind_cf_mean": timeseries_data["offshore_wind_cf"].mean(),
                 "wind_advantage": (
-                        timeseries_data["offshore_wind_cf"].mean()
-                        - timeseries_data["onshore_wind_cf"].mean()
+                    timeseries_data["offshore_wind_cf"].mean()
+                    - timeseries_data["onshore_wind_cf"].mean()
                 ),
                 "load_mean_mw": timeseries_data["load"].mean(),
                 "load_peak_mw": timeseries_data["load"].max(),
@@ -249,9 +236,6 @@ def build_cf_timeseries_long(
         }
 
         for technology, series in technology_mapping.items():
-            if series.empty:
-                continue
-
             valid_series = series.dropna()
 
             if valid_series.empty:
@@ -271,10 +255,17 @@ def build_cf_timeseries_long(
         raise ValueError("No capacity factor data could be assembled.")
 
     cf_long_df = pd.concat(rows, ignore_index=True)
+
     return cf_long_df
 
 
-def compute_capacity_sensitivity_metrics(capacity_df: pd.DataFrame) -> pd.DataFrame:
+# =========================================================
+# METRICS
+# =========================================================
+
+def compute_capacity_sensitivity_metrics(
+    capacity_df: pd.DataFrame,
+) -> pd.DataFrame:
     """
     Compute simple variability metrics for installed capacities across weather years.
 
@@ -312,14 +303,15 @@ def build_comparison_table(
     pd.DataFrame
         Combined table for interpretation.
     """
-    comparison_df = capacity_df.join(cf_df, how="left")
-    return comparison_df
+    return capacity_df.join(cf_df, how="left")
 
 
-def compute_cf_capacity_correlations(comparison_df: pd.DataFrame) -> pd.DataFrame:
+def compute_cf_capacity_correlations(
+    comparison_df: pd.DataFrame,
+) -> pd.DataFrame:
     """
-    Compute simple correlations between yearly mean CF and installed capacity for
-    the renewable technologies.
+    Compute simple correlations between yearly mean CF and installed capacity
+    for the renewable technologies.
 
     Returns
     -------
@@ -337,6 +329,7 @@ def compute_cf_capacity_correlations(comparison_df: pd.DataFrame) -> pd.DataFram
     for capacity_col, cf_col in pairs:
         if capacity_col in comparison_df.columns and cf_col in comparison_df.columns:
             correlation = comparison_df[capacity_col].corr(comparison_df[cf_col])
+
             rows.append(
                 {
                     "technology": capacity_col,
@@ -345,9 +338,17 @@ def compute_cf_capacity_correlations(comparison_df: pd.DataFrame) -> pd.DataFram
                 }
             )
 
+    if not rows:
+        return pd.DataFrame()
+
     correlation_df = pd.DataFrame(rows).set_index("technology")
+
     return correlation_df
 
+
+# =========================================================
+# PLOTTING
+# =========================================================
 
 def plot_capacity_boxplot(
     capacity_df: pd.DataFrame,
@@ -366,6 +367,30 @@ def plot_capacity_boxplot(
     ax.set_xlabel("Generator", fontsize=14)
     ax.tick_params(axis="x", labelrotation=35, labelsize=12)
     ax.tick_params(axis="y", labelsize=12)
+
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_capacity_by_weather_year(
+    capacity_df: pd.DataFrame,
+    output_path: Path,
+) -> None:
+    """
+    Plot optimized installed capacities by weather year.
+    """
+    ordered_columns = capacity_df.mean().sort_values(ascending=False).index
+    plot_df = capacity_df[ordered_columns]
+
+    fig, ax = plt.subplots(figsize=(8.8, 5.4))
+    plot_df.plot(kind="bar", ax=ax)
+
+    ax.set_ylabel("Installed capacity [MW]", fontsize=14)
+    ax.set_xlabel("Weather year", fontsize=14)
+    ax.tick_params(axis="x", labelrotation=0, labelsize=12)
+    ax.tick_params(axis="y", labelsize=12)
+    ax.legend(fontsize=11, ncol=2)
 
     plt.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -393,6 +418,7 @@ def plot_cf_boxplots(
         subset = cf_long_df[cf_long_df["technology"] == technology].copy()
 
         years = sorted(subset["weather_year"].unique())
+
         data = [
             subset.loc[subset["weather_year"] == year, "capacity_factor"].values
             for year in years
@@ -402,6 +428,7 @@ def plot_cf_boxplots(
 
         ax.set_title(technology.capitalize(), fontsize=13)
         ax.set_xlabel("Weather year", fontsize=12)
+        ax.set_xticks(range(1, len(years) + 1))
         ax.set_xticklabels(years, rotation=0)
         ax.tick_params(axis="both", labelsize=10)
 
@@ -418,9 +445,6 @@ def plot_cf_vs_capacity_by_year(
 ) -> None:
     """
     Plot yearly mean renewable CF and installed renewable capacities.
-
-    This figure is mainly for your own analysis and interpretation. It does not
-    necessarily need to go into the report.
     """
     renewable_pairs = [
         ("solar", "solar_cf_mean", "Solar"),
@@ -428,7 +452,12 @@ def plot_cf_vs_capacity_by_year(
         ("offshore wind", "offshore_wind_cf_mean", "Offshore wind"),
     ]
 
-    fig, axes = plt.subplots(nrows=3, ncols=1, figsize=(8.8, 9.5), sharex=True)
+    fig, axes = plt.subplots(
+        nrows=3,
+        ncols=1,
+        figsize=(8.8, 9.5),
+        sharex=True,
+    )
 
     for ax, (capacity_col, cf_col, title) in zip(axes, renewable_pairs):
         if capacity_col not in comparison_df.columns or cf_col not in comparison_df.columns:
@@ -441,13 +470,16 @@ def plot_cf_vs_capacity_by_year(
             comparison_df[capacity_col],
             marker="o",
             linewidth=1.8,
+            label="Capacity",
         )
+
         ax_secondary.plot(
             comparison_df.index,
             comparison_df[cf_col],
             marker="s",
             linestyle="--",
             linewidth=1.8,
+            label="Mean CF",
         )
 
         ax.set_ylabel("Capacity [MW]", fontsize=11)
@@ -464,6 +496,10 @@ def plot_cf_vs_capacity_by_year(
     plt.close(fig)
 
 
+# =========================================================
+# PRINTING
+# =========================================================
+
 def print_analysis_summary(
     sensitivity_df: pd.DataFrame,
     cf_capacity_correlation_df: pd.DataFrame,
@@ -472,21 +508,34 @@ def print_analysis_summary(
     Print a compact console summary to help interpret the results.
     """
     print("\nSensitivity ranking by absolute capacity range:")
+
     for technology, row in sensitivity_df.iterrows():
+        relative_range = row["relative_range"]
+
+        if pd.isna(relative_range):
+            relative_range_text = "n/a"
+        else:
+            relative_range_text = f"{relative_range:.3f}"
+
         print(
             f"  {technology}: mean={row['mean_capacity_mw']:.1f} MW, "
             f"range={row['range_capacity_mw']:.1f} MW, "
-            f"relative_range={row['relative_range']:.3f}"
+            f"relative_range={relative_range_text}"
         )
 
     if not cf_capacity_correlation_df.empty:
         print("\nCorrelation between mean CF and installed capacity:")
+
         for technology, row in cf_capacity_correlation_df.iterrows():
             print(
                 f"  {technology}: corr(capacity, CF) = "
                 f"{row['correlation_capacity_vs_cf']:.3f}"
             )
 
+
+# =========================================================
+# MAIN
+# =========================================================
 
 def main() -> None:
     """
@@ -531,12 +580,15 @@ def main() -> None:
     print("\nWind advantage (offshore - onshore CF):")
     print(cf_df["wind_advantage"].round(4))
 
-    print("\nWind competition overview:")
-    print(
-        comparison_df[
-            ["onshore wind", "offshore wind", "wind_advantage"]
-        ].round(3)
-    )
+    if {"onshore wind", "offshore wind", "wind_advantage"}.issubset(
+        comparison_df.columns
+    ):
+        print("\nWind competition overview:")
+        print(
+            comparison_df[
+                ["onshore wind", "offshore wind", "wind_advantage"]
+            ].round(3)
+        )
 
     if not cf_capacity_correlation_df.empty:
         print("\nCF-capacity correlations:")
@@ -562,6 +614,11 @@ def main() -> None:
         output_path=OUTPUT_DIR / "capacity_boxplot_weather_years.png",
     )
 
+    plot_capacity_by_weather_year(
+        capacity_df=capacity_df,
+        output_path=OUTPUT_DIR / "capacity_by_weather_year.png",
+    )
+
     plot_cf_boxplots(
         cf_long_df=cf_long_df,
         output_path=OUTPUT_DIR / "cf_boxplot_weather_years.png",
@@ -571,6 +628,7 @@ def main() -> None:
         comparison_df=comparison_df,
         output_path=OUTPUT_DIR / "cf_vs_capacity_by_weather_year.png",
     )
+
 
 if __name__ == "__main__":
     main()

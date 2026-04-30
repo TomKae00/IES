@@ -1,6 +1,6 @@
 component,Generator,Generator,Generator,Generator,Generator,Generator
-carrier,coal,gas,nuclear,offwind,onwind,solar
-bus_carrier,electricity,electricity,electricity,electricity,electricity,electricity
+carrier,coal,gas CCGT,nuclear,offwind,onwind,solar
+bus_carrier,AC,AC,AC,AC,AC,AC
 snapshot,,,,,,
 2016-01-01 00:00:00,,1143.30628,,1884.93372,,
 2016-01-01 01:00:00,,1015.21403,,1873.30597,,

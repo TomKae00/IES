@@ -1,0 +1,45 @@
+country,technology,component,capacity_MW
+DK,battery charger,DK_battery_charger,4732.348730735597
+DK,battery discharger,DK_battery_discharger,4842.560495887445
+DE,battery charger,DE_battery_charger,24707.448481823645
+DE,battery discharger,DE_battery_discharger,25282.8607484418
+SE,battery charger,SE_battery_charger,4081.727522173307
+SE,battery discharger,SE_battery_discharger,4176.786956860757
+NO,battery charger,NO_battery_charger,1853.5524535758273
+NO,battery discharger,NO_battery_discharger,1896.7198740964986
+DK,CCGT,DK_CCGT,0.0
+DE,CCGT,DE_CCGT,36236.159274491845
+SE,CCGT,SE_CCGT,18461.791329354233
+NO,CCGT,NO_CCGT,2945.1144712811115
+NO,CH4 pipeline,NO_DK_CH4_NO_to_DK,78207.98554219479
+NO,CH4 pipeline,NO_DK_CH4_DK_to_NO,0.0
+NO,CH4 pipeline,NO_SE_CH4_NO_to_SE,29181.597850644055
+NO,CH4 pipeline,NO_SE_CH4_SE_to_NO,0.0
+NO,CH4 pipeline,NO_DE_CH4_NO_to_DE,0.0
+NO,CH4 pipeline,NO_DE_CH4_DE_to_NO,0.0
+DK,CH4 pipeline,DK_SE_CH4_DK_to_SE,0.0
+DK,CH4 pipeline,DK_SE_CH4_SE_to_DK,0.0
+DK,CH4 pipeline,DK_DE_CH4_DK_to_DE,75414.29413953779
+DK,CH4 pipeline,DK_DE_CH4_DE_to_DK,0.0
+DE,CH4 pipeline,DE_SE_CH4_DE_to_SE,0.0
+DE,CH4 pipeline,DE_SE_CH4_SE_to_DE,0.0
+DK,heat pump,DK_ASHP,3292.749301634778
+DK,resistive heater,DK_resistive_heater,2184.73318200575
+DK,gas boiler,DK_gas_boiler,2324.443489403825
+DK,heat storage charger,DK_water_tank_charger,0.0
+DK,heat storage discharger,DK_water_tank_discharger,0.0
+DE,heat pump,DE_ASHP,49833.94524490264
+DE,resistive heater,DE_resistive_heater,34767.60246650753
+DE,gas boiler,DE_gas_boiler,38989.599129697104
+DE,heat storage charger,DE_water_tank_charger,0.0
+DE,heat storage discharger,DE_water_tank_discharger,0.0
+SE,heat pump,SE_ASHP,6498.019863336089
+SE,resistive heater,SE_resistive_heater,6063.222981490241
+SE,gas boiler,SE_gas_boiler,10573.898532036601
+SE,heat storage charger,SE_water_tank_charger,0.0
+SE,heat storage discharger,SE_water_tank_discharger,0.0
+NO,heat pump,NO_ASHP,3273.124951230438
+NO,resistive heater,NO_resistive_heater,2001.8891923657611
+NO,gas boiler,NO_gas_boiler,2550.384765444807
+NO,heat storage charger,NO_water_tank_charger,0.0
+NO,heat storage discharger,NO_water_tank_discharger,0.0

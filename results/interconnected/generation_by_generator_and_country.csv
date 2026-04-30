@@ -1,0 +1,25 @@
+Country,Generator,Carrier,Optimized capacity [MW],Annual generation [GWh]
+DK,DK_solar,solar,15597.531834957606,20783.81789094078
+DK,DK_onshore_wind,onwind,0.0,0.0
+DK,DK_offshore_wind,offwind,4520.640978774831,15124.634259961922
+DK,DK_CCGT,gas CCGT,0.0,0.0
+DK,DK_coal,coal,0.0,0.0
+DK,DK_nuclear,nuclear,0.0,0.0
+DE,DE_solar,solar,19694.343805146513,17323.249512767954
+DE,DE_onshore_wind,onwind,0.0,0.0
+DE,DE_offshore_wind,offwind,68432.84065625184,293248.03782199766
+DE,DE_CCGT,gas CCGT,62341.11631884731,185711.7970574957
+DE,DE_coal,coal,0.0,0.0
+DE,DE_nuclear,nuclear,0.0,0.0
+SE,SE_solar,solar,0.0,0.0
+SE,SE_onshore_wind,onwind,49719.97852517508,109822.5478083068
+SE,SE_offshore_wind,offwind,0.0,0.0
+SE,SE_CCGT,gas CCGT,21102.281652474227,34873.11406665168
+SE,SE_coal,coal,0.0,0.0
+SE,SE_nuclear,nuclear,0.0,0.0
+NO,NO_solar,solar,0.0,0.0
+NO,NO_onshore_wind,onwind,0.0,0.0
+NO,NO_offshore_wind,offwind,0.0,0.0
+NO,NO_CCGT,gas CCGT,22406.16770503296,113070.90998745081
+NO,NO_coal,coal,0.0,0.0
+NO,NO_nuclear,nuclear,0.0,0.0

@@ -22,11 +22,9 @@ TIMESERIES_FILE = PROJECT_ROOT / FILE_PATHS["timeseries_file"]
 YEARS = [2015, 2016, 2017, 2018, 2019]
 COUNTRY_CODE = "DK"
 
-# This matches your saved files:
-# /home/tom/PycharmProjects/IES/results/networks/base_DK_2015.nc
-# /home/tom/PycharmProjects/IES/results/networks/base_DK_2016.nc
-# ...
 NETWORK_NAME_TEMPLATE = "base_DK_{year}.nc"
+
+REPORT_FONT_SIZE = 14
 
 CARRIER_ALIASES = {
     "solar": ["solar"],
@@ -36,6 +34,37 @@ CARRIER_ALIASES = {
     "coal": ["coal"],
     "nuclear": ["nuclear"],
 }
+
+
+# =========================================================
+# PLOT STYLE
+# =========================================================
+
+def set_report_plot_style() -> None:
+    """
+    Set basic report-ready matplotlib style.
+    """
+    plt.rcParams.update(
+        {
+            "font.size": REPORT_FONT_SIZE,
+            "axes.labelsize": REPORT_FONT_SIZE,
+            "xtick.labelsize": REPORT_FONT_SIZE,
+            "ytick.labelsize": REPORT_FONT_SIZE,
+            "legend.fontsize": REPORT_FONT_SIZE,
+            "figure.dpi": 150,
+            "savefig.dpi": 300,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+        }
+    )
+
+
+def save_figure(fig: plt.Figure, output_path: Path) -> None:
+    """
+    Save figure as PNG and PDF.
+    """
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    fig.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
 
 
 # =========================================================
@@ -67,18 +96,6 @@ def extract_generator_capacities(
     """
     Extract optimized installed generator capacities grouped into report-friendly
     technology categories.
-
-    Parameters
-    ----------
-    network_path : Path
-        Path to solved PyPSA network file.
-    carrier_aliases : dict[str, list[str]]
-        Mapping from report technology names to possible PyPSA carrier names.
-
-    Returns
-    -------
-    pd.Series
-        Optimized capacities in MW for the requested technologies.
     """
     network = pypsa.Network(network_path)
 
@@ -120,11 +137,6 @@ def build_capacity_table(
 ) -> pd.DataFrame:
     """
     Build a table of optimized installed capacities by weather year.
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame indexed by weather year with technologies as columns.
     """
     rows = []
 
@@ -171,11 +183,6 @@ def build_cf_summary(
     the model:
     - electricity demand is fixed to 2016 and mapped to the selected year
     - renewable capacity factors use the selected weather year
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame indexed by weather year.
     """
     rows = []
 
@@ -213,12 +220,6 @@ def build_cf_timeseries_long(
 ) -> pd.DataFrame:
     """
     Build long-format hourly renewable capacity factor data for all years.
-
-    Returns
-    -------
-    pd.DataFrame
-        Long-format DataFrame with columns:
-        weather_year, technology, capacity_factor
     """
     rows = []
 
@@ -268,11 +269,6 @@ def compute_capacity_sensitivity_metrics(
 ) -> pd.DataFrame:
     """
     Compute simple variability metrics for installed capacities across weather years.
-
-    Returns
-    -------
-    pd.DataFrame
-        Summary metrics by technology.
     """
     metrics = pd.DataFrame(index=capacity_df.columns)
 
@@ -297,11 +293,6 @@ def build_comparison_table(
 ) -> pd.DataFrame:
     """
     Combine yearly installed capacities and yearly CF summary values.
-
-    Returns
-    -------
-    pd.DataFrame
-        Combined table for interpretation.
     """
     return capacity_df.join(cf_df, how="left")
 
@@ -312,11 +303,6 @@ def compute_cf_capacity_correlations(
     """
     Compute simple correlations between yearly mean CF and installed capacity
     for the renewable technologies.
-
-    Returns
-    -------
-    pd.DataFrame
-        Correlation summary.
     """
     pairs = [
         ("solar", "solar_cf_mean"),
@@ -356,22 +342,44 @@ def plot_capacity_boxplot(
 ) -> None:
     """
     Plot boxplot of optimized installed capacities across weather years.
+
+    Keeps technologies with zero installed capacity, so unused technologies
+    are still shown in the report figure.
     """
-    ordered_columns = capacity_df.mean().sort_values(ascending=False).index
-    plot_df = capacity_df[ordered_columns]
+    plot_df = capacity_df.copy()
+
+    ordered_columns = plot_df.mean().sort_values(ascending=False).index
+    plot_df = plot_df[ordered_columns]
 
     fig, ax = plt.subplots(figsize=(8.8, 5.4))
-    plot_df.boxplot(ax=ax)
 
-    ax.set_ylabel("Installed capacity [MW]", fontsize=14)
-    ax.set_xlabel("Generator", fontsize=14)
-    ax.tick_params(axis="x", labelrotation=35, labelsize=12)
-    ax.tick_params(axis="y", labelsize=12)
+    plot_df.boxplot(
+        ax=ax,
+        grid=False,
+        patch_artist=False,
+        showmeans=False,
+        medianprops={"color": "black", "linewidth": 1.5},
+        boxprops={"color": "black", "linewidth": 1.2},
+        whiskerprops={"color": "black", "linewidth": 1.2},
+        capprops={"color": "black", "linewidth": 1.2},
+        flierprops={
+            "marker": "o",
+            "markerfacecolor": "white",
+            "markeredgecolor": "black",
+            "markersize": 4,
+            "alpha": 0.8,
+        },
+    )
 
-    plt.tight_layout()
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    ax.set_ylabel("Installed capacity [MW]", fontsize=REPORT_FONT_SIZE)
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", labelrotation=25, labelsize=REPORT_FONT_SIZE)
+    ax.tick_params(axis="y", labelsize=REPORT_FONT_SIZE)
+    ax.grid(axis="y", alpha=0.3)
+
+    fig.tight_layout()
+    save_figure(fig, output_path)
     plt.close(fig)
-
 
 def plot_capacity_by_weather_year(
     capacity_df: pd.DataFrame,
@@ -380,20 +388,35 @@ def plot_capacity_by_weather_year(
     """
     Plot optimized installed capacities by weather year.
     """
-    ordered_columns = capacity_df.mean().sort_values(ascending=False).index
-    plot_df = capacity_df[ordered_columns]
+    plot_df = capacity_df.loc[:, (capacity_df > 0.0).any(axis=0)].copy()
+
+    ordered_columns = plot_df.mean().sort_values(ascending=False).index
+    plot_df = plot_df[ordered_columns]
 
     fig, ax = plt.subplots(figsize=(8.8, 5.4))
-    plot_df.plot(kind="bar", ax=ax)
 
-    ax.set_ylabel("Installed capacity [MW]", fontsize=14)
-    ax.set_xlabel("Weather year", fontsize=14)
-    ax.tick_params(axis="x", labelrotation=0, labelsize=12)
-    ax.tick_params(axis="y", labelsize=12)
-    ax.legend(fontsize=11, ncol=2)
+    plot_df.plot(
+        kind="bar",
+        ax=ax,
+        width=0.78,
+    )
 
-    plt.tight_layout()
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    ax.set_ylabel("Installed capacity [MW]", fontsize=REPORT_FONT_SIZE)
+    ax.set_xlabel("Weather year", fontsize=REPORT_FONT_SIZE)
+    ax.tick_params(axis="x", labelrotation=0, labelsize=REPORT_FONT_SIZE)
+    ax.tick_params(axis="y", labelsize=REPORT_FONT_SIZE)
+    ax.grid(axis="y", alpha=0.3)
+
+    ax.legend(
+        loc="upper right",
+        fontsize=REPORT_FONT_SIZE,
+        ncol=2,
+        frameon=True,
+        framealpha=0.9,
+    )
+
+    fig.tight_layout()
+    save_figure(fig, output_path)
     plt.close(fig)
 
 
@@ -410,7 +433,7 @@ def plot_cf_boxplots(
     fig, axes = plt.subplots(
         nrows=1,
         ncols=3,
-        figsize=(12.5, 4.6),
+        figsize=(12.5, 4.8),
         sharey=True,
     )
 
@@ -424,18 +447,48 @@ def plot_cf_boxplots(
             for year in years
         ]
 
-        ax.boxplot(data)
+        ax.boxplot(
+            data,
+            patch_artist=False,
+            showmeans=False,
+            medianprops={"color": "black", "linewidth": 1.3},
+            boxprops={"color": "black", "linewidth": 1.1},
+            whiskerprops={"color": "black", "linewidth": 1.1},
+            capprops={"color": "black", "linewidth": 1.1},
+            flierprops={
+                "marker": "o",
+                "markerfacecolor": "white",
+                "markeredgecolor": "black",
+                "markersize": 3,
+                "alpha": 0.7,
+            },
+        )
 
-        ax.set_title(technology.capitalize(), fontsize=13)
-        ax.set_xlabel("Weather year", fontsize=12)
+        ax.set_xlabel("Weather year", fontsize=REPORT_FONT_SIZE)
         ax.set_xticks(range(1, len(years) + 1))
         ax.set_xticklabels(years, rotation=0)
-        ax.tick_params(axis="both", labelsize=10)
+        ax.tick_params(axis="both", labelsize=REPORT_FONT_SIZE)
+        ax.grid(axis="y", alpha=0.3)
 
-    axes[0].set_ylabel("Capacity factor [-]", fontsize=12)
+        ax.text(
+            0.04,
+            0.94,
+            technology,
+            transform=ax.transAxes,
+            fontsize=REPORT_FONT_SIZE,
+            verticalalignment="top",
+            bbox={
+                "boxstyle": "round,pad=0.25",
+                "facecolor": "white",
+                "edgecolor": "0.8",
+                "alpha": 0.9,
+            },
+        )
 
-    plt.tight_layout()
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    axes[0].set_ylabel("Capacity factor [-]", fontsize=REPORT_FONT_SIZE)
+
+    fig.tight_layout()
+    save_figure(fig, output_path)
     plt.close(fig)
 
 
@@ -459,7 +512,7 @@ def plot_cf_vs_capacity_by_year(
         sharex=True,
     )
 
-    for ax, (capacity_col, cf_col, title) in zip(axes, renewable_pairs):
+    for ax, (capacity_col, cf_col, label) in zip(axes, renewable_pairs):
         if capacity_col not in comparison_df.columns or cf_col not in comparison_df.columns:
             continue
 
@@ -479,20 +532,48 @@ def plot_cf_vs_capacity_by_year(
             marker="s",
             linestyle="--",
             linewidth=1.8,
+            color="black",
             label="Mean CF",
         )
 
-        ax.set_ylabel("Capacity [MW]", fontsize=11)
-        ax_secondary.set_ylabel("Mean CF [-]", fontsize=11)
-        ax.set_title(title, fontsize=12)
-        ax.tick_params(axis="y", labelsize=10)
-        ax_secondary.tick_params(axis="y", labelsize=10)
+        ax.set_ylabel("Capacity [MW]", fontsize=REPORT_FONT_SIZE)
+        ax_secondary.set_ylabel("Mean CF [-]", fontsize=REPORT_FONT_SIZE)
+        ax.tick_params(axis="y", labelsize=REPORT_FONT_SIZE)
+        ax_secondary.tick_params(axis="y", labelsize=REPORT_FONT_SIZE)
+        ax.grid(axis="y", alpha=0.3)
 
-    axes[-1].set_xlabel("Weather year", fontsize=12)
-    axes[-1].tick_params(axis="x", labelsize=11)
+        ax.text(
+            0.02,
+            0.90,
+            label,
+            transform=ax.transAxes,
+            fontsize=REPORT_FONT_SIZE,
+            verticalalignment="top",
+            bbox={
+                "boxstyle": "round,pad=0.25",
+                "facecolor": "white",
+                "edgecolor": "0.8",
+                "alpha": 0.9,
+            },
+        )
 
-    plt.tight_layout()
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+        lines_1, labels_1 = ax.get_legend_handles_labels()
+        lines_2, labels_2 = ax_secondary.get_legend_handles_labels()
+
+        ax.legend(
+            lines_1 + lines_2,
+            labels_1 + labels_2,
+            loc="upper right",
+            fontsize=REPORT_FONT_SIZE,
+            frameon=True,
+            framealpha=0.9,
+        )
+
+    axes[-1].set_xlabel("Weather year", fontsize=REPORT_FONT_SIZE)
+    axes[-1].tick_params(axis="x", labelsize=REPORT_FONT_SIZE)
+
+    fig.tight_layout()
+    save_figure(fig, output_path)
     plt.close(fig)
 
 
@@ -541,6 +622,7 @@ def main() -> None:
     """
     Run complete weather sensitivity analysis.
     """
+    set_report_plot_style()
     ensure_output_dir(OUTPUT_DIR)
 
     capacity_df = build_capacity_table(
@@ -628,6 +710,9 @@ def main() -> None:
         comparison_df=comparison_df,
         output_path=OUTPUT_DIR / "cf_vs_capacity_by_weather_year.png",
     )
+
+    print("\nWeather sensitivity analysis finished.")
+    print(f"Results saved to: {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":

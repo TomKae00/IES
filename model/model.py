@@ -364,7 +364,6 @@ def add_interconnectors(n: pypsa.Network) -> None:
             s_nom=capacity,
             s_nom_extendable=False,
             x=0.1,
-            r=0.1,
             #v_nom=400.0,
         )
 
@@ -587,7 +586,7 @@ def add_gas(
                 carrier="H2 pipeline",
                 p_nom_extendable=True,
                 efficiency=h2_efficiency,
-                capital_cost=h2_capital_cost,
+                #capital_cost=h2_capital_cost,
                 marginal_cost=0.0,
             )
 
@@ -599,7 +598,7 @@ def add_gas(
                 carrier="H2 pipeline",
                 p_nom_extendable=True,
                 efficiency=h2_efficiency,
-                capital_cost=h2_capital_cost,
+                #capital_cost=h2_capital_cost,
                 marginal_cost=0.0,
             )
 

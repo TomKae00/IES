@@ -1,33 +1,42 @@
 """
-PyPSA model construction for the IEG course project.
+PyPSA model construction and run script for the IES course project.
 
-This file contains only the model structure:
+This file contains:
+- network construction
 - carriers
 - buses, loads, generators
-- storage
+- battery storage
 - electricity interconnectors
 - gas network
 - heat sector coupling
 - CO2 constraint
 - optimization helper
+- report-ready analysis plots
 
 Scenario definitions are stored in scenarios.py.
 Data loading and cost preparation are stored in helpers.py.
-The selected scenario is run from run_model.py.
 """
 
 from pathlib import Path
 import sys
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-
-import pandas as pd
 import matplotlib.pyplot as plt
-import pypsa
 import numpy as np
+import pandas as pd
+import pypsa
 
 
-from model.helpers import (
+# =========================================================
+# PATH SETUP
+# =========================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+from model.helpers import (  # noqa: E402
     silence_gurobi_logger,
     prepare_costs,
     load_all_countries_timeseries,
@@ -35,15 +44,277 @@ from model.helpers import (
     calculate_conventional_marginal_cost,
 )
 
-from model.scenarios import (
+from model.scenarios import (  # noqa: E402
     FINANCIAL_PARAMETERS,
     FILE_PATHS,
     SCENARIOS,
 )
 
 
-# Change this to run another scenario
+# =========================================================
+# CONFIG
+# =========================================================
+
 ACTIVE_SCENARIO = "sector_coupling"
+
+OUTPUT_DIR = PROJECT_ROOT / "results" / "experiments"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+REPORT_FONT_SIZE = 14
+
+CARRIER_ALIASES = {
+    "electricity": ["electricity", "AC"],
+    "solar": ["solar"],
+    "onshore wind": ["onwind", "onshore wind"],
+    "offshore wind": ["offwind", "offshore wind"],
+    "CCGT": ["gas CCGT", "CCGT", "gas"],
+    "coal": ["coal"],
+    "nuclear": ["nuclear"],
+    "battery": ["battery"],
+    "battery charger": ["battery charger", "battery charge"],
+    "battery discharger": ["battery discharger", "battery discharge"],
+    "electrolysis": ["electrolysis"],
+    "H2 turbine": ["H2 turbine"],
+    "H2 fuel cell": ["H2 fuel cell"],
+    "heat pump": ["heat pump", "heat pump electricity"],
+    "resistive heater": ["resistive heater", "resistive heater electricity"],
+    "gas boiler": ["gas boiler"],
+    "heat storage charger": ["heat storage charger"],
+    "heat storage discharger": ["heat storage discharger", "heat storage discharge"],
+}
+
+DEFAULT_CARRIER_COLORS = {
+    "AC": "#4C566A",
+    "electricity": "#4C566A",
+    "solar": "#EBCB3B",
+    "onwind": "#5AA469",
+    "onshore wind": "#5AA469",
+    "offwind": "#2E86AB",
+    "offshore wind": "#2E86AB",
+    "gas CCGT": "#D08770",
+    "CCGT": "#D08770",
+    "coal": "#5C5C5C",
+    "nuclear": "#8F6BB3",
+    "battery": "#E67E22",
+    "battery charger": "#C06C84",
+    "battery discharger": "#6C5B7B",
+    "CH4": "#A35D3D",
+    "CH4 supply": "#8C564B",
+    "CH4 pipeline": "#7B4B2A",
+    "H2": "#4DA3FF",
+    "H2 store": "#7FDBFF",
+    "H2 pipeline": "#2F6DB3",
+    "electrolysis": "#3A86FF",
+    "H2 turbine": "#6FA8DC",
+    "H2 fuel cell": "#5E81AC",
+    "heat": "#B48EAD",
+    "heat pump": "#A3BE8C",
+    "resistive heater": "#BF616A",
+    "gas boiler": "#A35D3D",
+    "heat storage": "#D8DEE9",
+    "heat storage charger": "#88C0D0",
+    "heat storage discharger": "#81A1C1",
+}
+
+# Electricity balance order.
+# Negative side first: electricity demand, battery charging, electrolysis, heat-sector electricity use.
+# Positive side bottom to top: nuclear, coal, CCGT, offshore wind, onshore wind, solar, storage/H2.
+ELECTRICITY_BALANCE_ORDER = [
+    "electricity",
+    "battery charger",
+    "electrolysis",
+    "heat pump",
+    "resistive heater",
+    "nuclear",
+    "coal",
+    "CCGT",
+    "offshore wind",
+    "onshore wind",
+    "solar",
+    "battery discharger",
+    "H2 turbine",
+    "H2 fuel cell",
+]
+
+POSITIVE_ELECTRICITY_ORDER = [
+    "nuclear",
+    "coal",
+    "CCGT",
+    "offshore wind",
+    "onshore wind",
+    "solar",
+    "battery discharger",
+    "H2 turbine",
+    "H2 fuel cell",
+]
+
+HEAT_BALANCE_ORDER = [
+    "heat pump",
+    "resistive heater",
+    "gas boiler",
+    "heat storage discharger",
+]
+
+
+# =========================================================
+# PATH HELPERS
+# =========================================================
+
+def resolve_project_path(path_like: str | Path) -> Path:
+    """
+    Resolve a path relative to PROJECT_ROOT unless it is already absolute.
+    """
+    path = Path(path_like)
+
+    if path.is_absolute():
+        return path
+
+    return PROJECT_ROOT / path
+
+
+# =========================================================
+# PLOT STYLE
+# =========================================================
+
+def set_report_plot_style() -> None:
+    """
+    Set report-ready matplotlib style.
+    """
+    plt.rcParams.update(
+        {
+            "font.size": REPORT_FONT_SIZE,
+            "axes.labelsize": REPORT_FONT_SIZE,
+            "xtick.labelsize": REPORT_FONT_SIZE,
+            "ytick.labelsize": REPORT_FONT_SIZE,
+            "legend.fontsize": REPORT_FONT_SIZE,
+            "figure.dpi": 150,
+            "savefig.dpi": 300,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+        }
+    )
+
+
+def save_figure(fig: plt.Figure, output_path: Path) -> None:
+    """
+    Save figure as PNG and PDF.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    fig.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
+
+
+# =========================================================
+# GENERAL HELPERS
+# =========================================================
+
+def map_carrier_to_display_name(carrier: str) -> str:
+    """
+    Map internal carrier names to report-friendly labels.
+    """
+    for display_name, aliases in CARRIER_ALIASES.items():
+        if carrier in aliases:
+            return display_name
+
+    return carrier
+
+
+def get_carrier_color(n: pypsa.Network, carrier: str) -> str:
+    """
+    Return color for carrier from n.carriers if available, otherwise from defaults.
+    """
+    display_name = map_carrier_to_display_name(carrier)
+    candidates = [carrier, display_name]
+
+    if display_name in CARRIER_ALIASES:
+        candidates.extend(CARRIER_ALIASES[display_name])
+
+    for candidate in candidates:
+        if (
+            candidate in n.carriers.index
+            and "color" in n.carriers.columns
+            and pd.notna(n.carriers.at[candidate, "color"])
+            and n.carriers.at[candidate, "color"] != ""
+        ):
+            return n.carriers.at[candidate, "color"]
+
+        if candidate in DEFAULT_CARRIER_COLORS:
+            return DEFAULT_CARRIER_COLORS[candidate]
+
+    return "#999999"
+
+
+def get_carrier_colors(
+    n: pypsa.Network,
+    columns: pd.Index | list[str],
+) -> list[str]:
+    """
+    Return colors for multiple carriers.
+    """
+    return [get_carrier_color(n, carrier) for carrier in columns]
+
+
+def drop_empty_carriers(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop all-zero and all-NaN columns.
+    """
+    df = df.dropna(axis=1, how="all")
+    df = df.loc[:, (df.fillna(0.0).abs() > 0.0).any(axis=0)]
+
+    return df
+
+
+def reorder_columns(df: pd.DataFrame, order: list[str]) -> pd.DataFrame:
+    """
+    Reorder columns according to preferred order while keeping remaining columns.
+    """
+    ordered = [column for column in order if column in df.columns]
+    remaining = [column for column in df.columns if column not in ordered]
+
+    return df[ordered + remaining]
+
+
+def get_electricity_bus_carrier(n: pypsa.Network) -> str:
+    """
+    Return electricity bus carrier.
+    """
+    carriers = pd.Index(n.buses.carrier.dropna().unique())
+
+    for candidate in ["AC", "electricity"]:
+        if candidate in carriers:
+            return candidate
+
+    raise ValueError(
+        f"Could not find electricity bus carrier. Found bus carriers: {list(carriers)}"
+    )
+
+
+def get_peak_winter_week_index(
+    n: pypsa.Network,
+    load_name: str = "DK_electricity_demand",
+) -> pd.DatetimeIndex:
+    """
+    Return the winter week with the highest average Danish electricity demand.
+    """
+    snapshots = n.snapshots
+    winter_mask = (snapshots.month == 12) | (snapshots.month == 1)
+
+    if load_name not in n.loads_t.p_set.columns:
+        raise KeyError(
+            f"Could not find load '{load_name}' in n.loads_t.p_set. "
+            f"Available loads are: {list(n.loads_t.p_set.columns)}"
+        )
+
+    load = n.loads_t.p_set[load_name]
+    winter_load = load.loc[winter_mask]
+
+    weekly_avg_load = winter_load.resample("W").mean()
+    max_load_week_end = weekly_avg_load.idxmax()
+
+    week_start = max_load_week_end - pd.Timedelta(days=6)
+    week_end = max_load_week_end
+
+    return load.loc[week_start:week_end].index
 
 
 # =========================================================
@@ -55,43 +326,30 @@ def add_carriers(n: pypsa.Network) -> None:
     Add all carriers used across possible scenarios.
     """
     carrier_data = {
-        # Electricity
         "AC": {"color": "#4C566A"},
-
-        # Electricity generation
         "solar": {"color": "#EBCB3B"},
         "onwind": {"color": "#5AA469"},
         "offwind": {"color": "#2E86AB"},
         "gas CCGT": {"color": "#D08770"},
         "coal": {"color": "#5C5C5C"},
         "nuclear": {"color": "#8F6BB3"},
-
-        # Battery
         "battery": {"color": "#E67E22"},
         "battery charger": {"color": "#C06C84"},
         "battery discharger": {"color": "#6C5B7B"},
-
-        # CH4 network
         "CH4": {"color": "#A35D3D"},
         "CH4 supply": {"color": "#8C564B"},
         "CH4 pipeline": {"color": "#7B4B2A"},
         "CCGT": {"color": "#D08770"},
-
-        # H2 network
         "H2": {"color": "#4DA3FF"},
         "H2 store": {"color": "#7FDBFF"},
         "H2 pipeline": {"color": "#2F6DB3"},
         "electrolysis": {"color": "#3A86FF"},
         "H2 turbine": {"color": "#6FA8DC"},
         "H2 fuel cell": {"color": "#5E81AC"},
-
-        # Heat sector
         "heat": {"color": "#B48EAD"},
         "heat pump": {"color": "#A3BE8C"},
         "resistive heater": {"color": "#BF616A"},
         "gas boiler": {"color": "#A35D3D"},
-
-        # Heat storage
         "heat storage": {"color": "#D8DEE9"},
         "heat storage charger": {"color": "#88C0D0"},
         "heat storage discharger": {"color": "#81A1C1"},
@@ -108,28 +366,22 @@ def set_carrier_co2_emissions(
 ) -> None:
     """
     Set carrier CO2 emissions for optional global CO2 constraints.
-
-    Values are assumed to be in tCO2/MWh_fuel if available in cost_data.
     """
     if "co2_emissions" not in n.carriers.columns:
         n.carriers["co2_emissions"] = 0.0
 
     if "gas" in cost_data.index and "CO2 intensity" in cost_data.columns:
         gas_co2_intensity = cost_data.at["gas", "CO2 intensity"]
-
-        # Simplified gas-fired electricity generator
         n.carriers.loc["gas CCGT", "co2_emissions"] = gas_co2_intensity
-
-        # Explicit CH4 supply into the CH4 network
         n.carriers.loc["CH4 supply", "co2_emissions"] = gas_co2_intensity
-
-        # Simplified gas boiler generator in the heat sector
         n.carriers.loc["gas boiler", "co2_emissions"] = gas_co2_intensity
 
     if "coal" in cost_data.index and "CO2 intensity" in cost_data.columns:
         n.carriers.loc["coal", "co2_emissions"] = cost_data.at[
-            "coal", "CO2 intensity"
+            "coal",
+            "CO2 intensity",
         ]
+
 
 # =========================================================
 # BASE ELECTRICITY MODEL
@@ -143,21 +395,11 @@ def add_electricity(
 ) -> None:
     """
     Add electricity buses, loads, renewable generators, and conventional generators.
-
-    If the gas network is enabled, CCGT is not added here as a normal generator.
-    Instead, it is added later in add_gas() as a CH4-to-electricity link.
     """
     for country_code in scenario["countries"]:
         timeseries_data = all_timeseries_data[country_code]
 
-        # -----------------------------
-        # Electricity bus and demand
-        # -----------------------------
-        n.add(
-            "Bus",
-            country_code,
-            carrier="AC",
-        )
+        n.add("Bus", country_code, carrier="AC")
 
         n.add(
             "Load",
@@ -167,9 +409,6 @@ def add_electricity(
             p_set=timeseries_data["load"],
         )
 
-        # -----------------------------
-        # Solar PV
-        # -----------------------------
         n.add(
             "Generator",
             f"{country_code}_solar",
@@ -181,9 +420,6 @@ def add_electricity(
             marginal_cost=cost_data.at["solar", "VOM"],
         )
 
-        # -----------------------------
-        # Onshore wind
-        # -----------------------------
         n.add(
             "Generator",
             f"{country_code}_onshore_wind",
@@ -195,22 +431,6 @@ def add_electricity(
             marginal_cost=cost_data.at["onwind", "VOM"],
         )
 
-        # -----------------------------
-        # Offshore wind
-        # -----------------------------
-        #if country_code == "DK":
-        #    n.add(
-        #        "Generator",
-        #        f"{country_code}_offshore_wind",
-        #        bus=country_code,
-        #        carrier="offwind",
-        #        p_nom_extendable=True,
-        #        p_nom_max=2650,
-        #        p_max_pu=timeseries_data["offshore_wind_cf"],
-        #        capital_cost=cost_data.at["offwind", "fixed"],
-        #        marginal_cost=cost_data.at["offwind", "VOM"],
-        #        )
-        #else:
         n.add(
             "Generator",
             f"{country_code}_offshore_wind",
@@ -222,14 +442,9 @@ def add_electricity(
             marginal_cost=cost_data.at["offwind", "VOM"],
         )
 
-        # -----------------------------
-        # CCGT
-        # -----------------------------
-        # Only add CCGT as a normal generator if gas is not explicitly modeled.
-        # If with_gas_network=True, CCGT is added later as a CH4-to-electricity link.
         if (
-                not scenario.get("with_ch4_network", False)
-                and not scenario.get("with_h2_network", False)
+            not scenario.get("with_ch4_network", False)
+            and not scenario.get("with_h2_network", False)
         ):
             marginal_cost = calculate_conventional_marginal_cost(
                 cost_data=cost_data,
@@ -248,9 +463,6 @@ def add_electricity(
                 efficiency=cost_data.at["CCGT", "efficiency"],
             )
 
-        # -----------------------------
-        # Coal
-        # -----------------------------
         marginal_cost = calculate_conventional_marginal_cost(
             cost_data=cost_data,
             technology="coal",
@@ -268,9 +480,6 @@ def add_electricity(
             efficiency=cost_data.at["coal", "efficiency"],
         )
 
-        # -----------------------------
-        # Nuclear
-        # -----------------------------
         if "nuclear" in cost_data.index:
             marginal_cost = calculate_conventional_marginal_cost(
                 cost_data=cost_data,
@@ -287,12 +496,11 @@ def add_electricity(
                 capital_cost=cost_data.at["nuclear", "fixed"],
                 marginal_cost=marginal_cost,
                 efficiency=cost_data.at["nuclear", "efficiency"],
-
-                # ensure nuclear is run less flexible:
                 p_min_pu=0.5,
                 ramp_limit_up=0.3,
                 ramp_limit_down=0.3,
             )
+
 
 # =========================================================
 # STORAGE EXTENSION
@@ -305,28 +513,12 @@ def add_battery_storage(
 ) -> None:
     """
     Add battery storage to each modeled country.
-
-    Each battery is represented by:
-    - one battery bus
-    - one Store for energy capacity
-    - one charging Link from the electricity bus to the battery bus
-    - one discharging Link from the battery bus to the electricity bus
     """
     for country_code in scenario["countries"]:
         battery_bus = f"{country_code}_battery"
 
-        # -----------------------------
-        # Battery bus
-        # -----------------------------
-        n.add(
-            "Bus",
-            battery_bus,
-            carrier="battery",
-        )
+        n.add("Bus", battery_bus, carrier="battery")
 
-        # -----------------------------
-        # Battery energy capacity
-        # -----------------------------
         n.add(
             "Store",
             f"{country_code}_battery_store",
@@ -337,9 +529,6 @@ def add_battery_storage(
             capital_cost=cost_data.at["battery storage", "fixed"],
         )
 
-        # -----------------------------
-        # Battery charging link
-        # -----------------------------
         n.add(
             "Link",
             f"{country_code}_battery_charger",
@@ -352,9 +541,6 @@ def add_battery_storage(
             p_nom_extendable=True,
         )
 
-        # -----------------------------
-        # Battery discharging link
-        # -----------------------------
         n.add(
             "Link",
             f"{country_code}_battery_discharger",
@@ -373,10 +559,7 @@ def add_battery_storage(
 
 def add_interconnectors(n: pypsa.Network) -> None:
     """
-    Add fixed electricity interconnectors between the modeled countries.
-
-    Lines are bidirectional in PyPSA. bus0 and bus1 only define the positive
-    flow direction.
+    Add fixed bidirectional electricity interconnectors.
     """
     line_data = [
         ("DK", "NO", "DK_NO", 1632.0),
@@ -400,7 +583,6 @@ def add_interconnectors(n: pypsa.Network) -> None:
             s_nom_extendable=False,
             x=0.1,
             r=0.1,
-            #v_nom=400.0,
         )
 
 
@@ -414,21 +596,7 @@ def add_gas(
     scenario: dict,
 ) -> None:
     """
-    Add gas sector components to the network.
-
-    The gas sector can include CH4, H2, or both, depending on the scenario:
-
-    - with_ch4_network:
-        CH4 buses, CH4 supply, CCGT links, CH4 pipelines
-
-    - with_h2_network:
-        H2 buses, electrolysis, optional H2 turbine/fuel cell, H2 pipelines
-
-    Note
-    ----
-    If the CH4 network is enabled, CCGT should not be added as a normal
-    electricity generator in add_electricity(). Instead, it is represented here
-    as a conversion link from CH4 to electricity.
+    Add CH4 and/or H2 sector components.
     """
     countries = scenario["countries"]
 
@@ -436,18 +604,13 @@ def add_gas(
     with_h2_network = scenario.get("with_h2_network", True)
 
     if not with_ch4_network and not with_h2_network:
-        raise ValueError("add_gas() was called although both CH4 and H2 networks are disabled.")
+        raise ValueError(
+            "add_gas() was called although both CH4 and H2 networks are disabled."
+        )
 
     for country_code in countries:
-        # -----------------------------
-        # CH4 system
-        # -----------------------------
         if with_ch4_network:
-            n.add(
-                "Bus",
-                f"{country_code}_CH4",
-                carrier="CH4",
-            )
+            n.add("Bus", f"{country_code}_CH4", carrier="CH4")
 
             n.add(
                 "Link",
@@ -461,15 +624,8 @@ def add_gas(
                 marginal_cost=cost_data.at["CCGT", "VOM"],
             )
 
-        # -----------------------------
-        # H2 system
-        # -----------------------------
         if with_h2_network:
-            n.add(
-                "Bus",
-                f"{country_code}_H2",
-                carrier="H2",
-            )
+            n.add("Bus", f"{country_code}_H2", carrier="H2")
 
             n.add(
                 "Link",
@@ -507,7 +663,6 @@ def add_gas(
                 marginal_cost=cost_data.at["fuel cell", "VOM"],
             )
 
-            # H2 storage
             n.add(
                 "Store",
                 f"{country_code}_H2_store",
@@ -521,9 +676,6 @@ def add_gas(
                 ],
             )
 
-    # -----------------------------
-    # CH4 supply
-    # -----------------------------
     if with_ch4_network:
         if "NO" in countries:
             fuel_cost = cost_data.at["gas", "fuel"]
@@ -546,9 +698,6 @@ def add_gas(
         else:
             print("Warning: NO not in modeled countries. No CH4 supply added.")
 
-    # -----------------------------
-    # Gas pipelines
-    # -----------------------------
     gas_corridor_data = [
         ("NO", "DK", "NO_DK", 600.0),
         ("NO", "SE", "NO_SE", 500.0),
@@ -566,12 +715,8 @@ def add_gas(
             )
             continue
 
-        # -----------------------------
-        # CH4 pipeline
-        # -----------------------------
         if with_ch4_network:
             ch4_tech_name = "CH4 (g) pipeline"
-
             ch4_electricity_input = cost_data.at[ch4_tech_name, "electricity-input"]
 
             ch4_efficiency = 1.0 - ch4_electricity_input * length_km / 1000.0
@@ -585,7 +730,6 @@ def add_gas(
                 carrier="CH4 pipeline",
                 p_nom_extendable=True,
                 efficiency=ch4_efficiency,
-                #capital_cost=ch4_capital_cost,
                 marginal_cost=0.0,
             )
 
@@ -597,16 +741,11 @@ def add_gas(
                 carrier="CH4 pipeline",
                 p_nom_extendable=True,
                 efficiency=ch4_efficiency,
-                #capital_cost=ch4_capital_cost,
                 marginal_cost=0.0,
             )
 
-        # -----------------------------
-        # H2 pipeline
-        # -----------------------------
         if with_h2_network:
             h2_tech_name = "H2 (g) pipeline"
-
             h2_electricity_input = cost_data.at[h2_tech_name, "electricity-input"]
 
             h2_efficiency = 1.0 - h2_electricity_input * length_km / 1000.0
@@ -620,7 +759,6 @@ def add_gas(
                 carrier="H2 pipeline",
                 p_nom_extendable=True,
                 efficiency=h2_efficiency,
-                #capital_cost=h2_capital_cost,
                 marginal_cost=0.0,
             )
 
@@ -632,7 +770,6 @@ def add_gas(
                 carrier="H2 pipeline",
                 p_nom_extendable=True,
                 efficiency=h2_efficiency,
-                #capital_cost=h2_capital_cost,
                 marginal_cost=0.0,
             )
 
@@ -649,23 +786,6 @@ def add_heat(
 ) -> None:
     """
     Add a decentral heat sector to all modeled countries.
-
-    The heat sector includes:
-    - one heat bus per country
-    - one heat demand per country
-    - one decentral air-sourced heat pump per country
-    - one decentral resistive heater per country
-    - one decentral gas boiler per country
-    - optionally one decentral water tank storage per country
-
-    Heat demand:
-        {country_code}_heat_demand_total
-
-    Heat pump COP:
-        {country_code}_COP_ASHP_floor
-
-    For Norway, Danish heat demand and COP profiles are used as a proxy in
-    helpers.load_heat_timeseries().
     """
     with_ch4_network = scenario.get("with_ch4_network", False)
 
@@ -679,18 +799,8 @@ def add_heat(
         heat_bus = f"{country_code}_heat"
         heat_storage_bus = f"{country_code}_heat_storage"
 
-        # -----------------------------
-        # Heat bus
-        # -----------------------------
-        n.add(
-            "Bus",
-            heat_bus,
-            carrier="heat",
-        )
+        n.add("Bus", heat_bus, carrier="heat")
 
-        # -----------------------------
-        # Heat demand
-        # -----------------------------
         n.add(
             "Load",
             f"{country_code}_heat_demand",
@@ -699,9 +809,6 @@ def add_heat(
             p_set=heat_demand,
         )
 
-        # -----------------------------
-        # Decentral air-sourced heat pump: electricity -> heat
-        # -----------------------------
         heat_pump_tech = "decentral air-sourced heat pump"
 
         n.add(
@@ -716,9 +823,6 @@ def add_heat(
             marginal_cost=cost_data.at[heat_pump_tech, "VOM"],
         )
 
-        # -----------------------------
-        # Decentral resistive heater: electricity -> heat
-        # -----------------------------
         resistive_heater_tech = "decentral resistive heater"
 
         n.add(
@@ -733,16 +837,10 @@ def add_heat(
             marginal_cost=cost_data.at[resistive_heater_tech, "VOM"],
         )
 
-        # -----------------------------
-        # Decentral gas boiler
-        # -----------------------------
         gas_boiler_tech = "decentral gas boiler"
         gas_boiler_efficiency = cost_data.at[gas_boiler_tech, "efficiency"]
 
         if with_ch4_network:
-            # If CH4 is explicitly modeled, the gas boiler consumes CH4 from
-            # the country CH4 bus. Fuel cost and emissions are accounted for
-            # when CH4 enters the system through CH4 supply.
             n.add(
                 "Link",
                 f"{country_code}_gas_boiler",
@@ -756,17 +854,12 @@ def add_heat(
             )
 
         else:
-            # If CH4 is not explicitly modeled, represent the gas boiler as a
-            # fuel-consuming heat generator. In this case, the CO2 constraint
-            # can account for emissions through the gas boiler carrier.
             gas_fuel_cost = cost_data.at["gas", "fuel"]
 
             if "CO2 intensity" in cost_data.columns:
                 gas_co2_intensity = cost_data.at["gas", "CO2 intensity"]
                 gas_boiler_co2_cost = (
-                    gas_co2_intensity
-                    / gas_boiler_efficiency
-                    * scenario["co2_price"]
+                    gas_co2_intensity / gas_boiler_efficiency * scenario["co2_price"]
                 )
             else:
                 gas_boiler_co2_cost = 0.0
@@ -788,19 +881,12 @@ def add_heat(
                 marginal_cost=gas_boiler_marginal_cost,
             )
 
-        # -----------------------------
-        # Optional decentral water tank storage
-        # -----------------------------
         if scenario.get("with_heat_storage", False):
             water_tank_storage_tech = "decentral water tank storage"
             water_tank_charger_tech = "decentral water tank charger"
             water_tank_discharger_tech = "decentral water tank discharger"
 
-            n.add(
-                "Bus",
-                heat_storage_bus,
-                carrier="heat storage",
-            )
+            n.add("Bus", heat_storage_bus, carrier="heat storage")
 
             n.add(
                 "Link",
@@ -824,8 +910,6 @@ def add_heat(
                 marginal_cost=cost_data.at[water_tank_discharger_tech, "VOM"],
             )
 
-            # Store the energy-to-power ratio as metadata. This does not yet
-            # enforce the ratio as a constraint.
             n.links.loc[
                 f"{country_code}_water_tank_charger",
                 "energy_to_power_ratio",
@@ -844,8 +928,7 @@ def add_heat(
                 standing_loss=cost_data.at[
                     water_tank_storage_tech,
                     "standing losses",
-                ]
-                / 100,
+                ] / 100,
                 capital_cost=cost_data.at[water_tank_storage_tech, "fixed"],
             )
 
@@ -860,8 +943,6 @@ def add_global_co2_constraint(
 ) -> None:
     """
     Add global CO2 constraint.
-
-    co2_limit is the allowed total emissions over the modeled period in tCO2.
     """
     n.add(
         "GlobalConstraint",
@@ -880,10 +961,6 @@ def add_global_co2_constraint(
 def add_battery_charger_ratio_constraints(n: pypsa.Network) -> None:
     """
     Add battery charger/discharger capacity ratio constraints.
-
-    For each battery, enforce:
-
-        charger_p_nom - discharger_efficiency * discharger_p_nom == 0
     """
     if n.links.empty or not n.links.p_nom_extendable.any():
         return
@@ -919,7 +996,6 @@ def add_battery_charger_ratio_constraints(n: pypsa.Network) -> None:
 
         charger_p_nom = n.model["Link-p_nom"].loc[charger_link]
         discharger_p_nom = n.model["Link-p_nom"].loc[discharger_link]
-
         discharger_efficiency = n.links.at[discharger_link, "efficiency"]
 
         n.model.add_constraints(
@@ -931,10 +1007,6 @@ def add_battery_charger_ratio_constraints(n: pypsa.Network) -> None:
 def add_tes_energy_to_power_ratio_constraints(n: pypsa.Network) -> None:
     """
     Add thermal energy storage energy-to-power ratio constraints.
-
-    For each water tank storage unit, enforce:
-
-        Store-e_nom - energy_to_power_ratio * Link-p_nom == 0
     """
     charger_links = n.links.index[
         n.links.index.str.contains("_water_tank_charger")
@@ -1012,7 +1084,9 @@ def create_network(
     scenario: dict,
     heat_timeseries: dict[str, dict[str, pd.Series]] | None = None,
 ) -> pypsa.Network:
-
+    """
+    Create PyPSA network from scenario settings.
+    """
     n = pypsa.Network()
 
     reference_country = scenario["countries"][0]
@@ -1066,6 +1140,7 @@ def create_network(
 
     return n
 
+
 # =========================================================
 # SOLVING AND EXPORT
 # =========================================================
@@ -1082,9 +1157,9 @@ def optimize_and_save_network(
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def extra_functionality(n: pypsa.Network, snapshots) -> None:
+    def extra_functionality(network: pypsa.Network, snapshots) -> None:
         custom_constraints(
-            n=n,
+            n=network,
             snapshots=snapshots,
             scenario=scenario,
         )
@@ -1099,7 +1174,6 @@ def optimize_and_save_network(
 
     n.export_to_netcdf(output_path)
 
-
     print(f"\nOptimized network saved to: {output_path}")
 
 
@@ -1108,7 +1182,7 @@ def print_model_summary(n: pypsa.Network) -> None:
     Print compact model summary after optimization.
     """
     print("\nOptimized generator capacities [MW]:")
-    if not n.generators.empty:
+    if not n.generators.empty and "p_nom_opt" in n.generators.columns:
         print(n.generators[["carrier", "p_nom_opt"]])
 
     print("\nOptimized link capacities [MW]:")
@@ -1122,113 +1196,182 @@ def print_model_summary(n: pypsa.Network) -> None:
     print("\nObjective value:")
     print(n.objective)
 
+
+# =========================================================
+# ENERGY BALANCE EXTRACTION
+# =========================================================
+
+def get_dk_electricity_balance_by_carrier(n: pypsa.Network) -> pd.DataFrame:
+    """
+    Return time-resolved DK electricity-bus balance by carrier.
+
+    Positive values are injections into the DK electricity bus.
+    Negative values are withdrawals from the DK electricity bus.
+    """
+    try:
+        balance = n.statistics.energy_balance(
+            aggregate_time=False,
+            nice_names=False,
+        )
+
+        if "bus" in balance.index.names:
+            balance_dk = balance.xs("DK", level="bus")
+            balance_by_carrier = balance_dk.groupby(level="carrier").sum()
+            balance_by_carrier_t = balance_by_carrier.T
+
+            if len(balance_by_carrier_t.index) == len(n.snapshots):
+                balance_by_carrier_t.index = n.snapshots
+
+            balance_by_carrier_t = balance_by_carrier_t.rename(
+                columns=lambda carrier: map_carrier_to_display_name(carrier)
+            )
+
+            balance_by_carrier_t = balance_by_carrier_t.T.groupby(level=0).sum().T
+            balance_by_carrier_t = drop_empty_carriers(balance_by_carrier_t)
+            balance_by_carrier_t = reorder_columns(
+                balance_by_carrier_t,
+                ELECTRICITY_BALANCE_ORDER,
+            )
+
+            return balance_by_carrier_t
+
+    except Exception as error:
+        print(
+            "Could not use n.statistics.energy_balance() for DK electricity balance. "
+            f"Using component fallback. Reason: {error}"
+        )
+
+    balance_by_carrier_t = pd.DataFrame(index=n.snapshots)
+
+    dk_loads = n.loads[n.loads.bus == "DK"].index
+    if len(dk_loads) > 0:
+        electricity_loads = [
+            load for load in dk_loads if "electricity" in load or n.loads.at[load, "carrier"] == "AC"
+        ]
+        if electricity_loads:
+            balance_by_carrier_t["electricity"] = -n.loads_t.p_set[
+                electricity_loads
+            ].sum(axis=1)
+
+    dk_generators = n.generators[n.generators.bus == "DK"]
+
+    for generator in dk_generators.index:
+        carrier = map_carrier_to_display_name(n.generators.at[generator, "carrier"])
+
+        if carrier not in balance_by_carrier_t.columns:
+            balance_by_carrier_t[carrier] = 0.0
+
+        balance_by_carrier_t[carrier] = balance_by_carrier_t[carrier].add(
+            n.generators_t.p[generator].clip(lower=0.0),
+            fill_value=0.0,
+        )
+
+    # Links withdrawing electricity from DK.
+    for link in n.links.index[n.links.bus0 == "DK"]:
+        carrier = map_carrier_to_display_name(n.links.at[link, "carrier"])
+
+        if carrier not in ["battery charger", "electrolysis", "heat pump", "resistive heater"]:
+            continue
+
+        if carrier not in balance_by_carrier_t.columns:
+            balance_by_carrier_t[carrier] = 0.0
+
+        balance_by_carrier_t[carrier] = balance_by_carrier_t[carrier].add(
+            -n.links_t.p0[link].clip(lower=0.0),
+            fill_value=0.0,
+        )
+
+    # Links injecting electricity into DK.
+    for link in n.links.index[n.links.bus1 == "DK"]:
+        carrier = map_carrier_to_display_name(n.links.at[link, "carrier"])
+
+        if carrier not in ["battery discharger", "CCGT", "H2 turbine", "H2 fuel cell"]:
+            continue
+
+        if carrier not in balance_by_carrier_t.columns:
+            balance_by_carrier_t[carrier] = 0.0
+
+        balance_by_carrier_t[carrier] = balance_by_carrier_t[carrier].add(
+            (-n.links_t.p1[link]).clip(lower=0.0),
+            fill_value=0.0,
+        )
+
+    balance_by_carrier_t = drop_empty_carriers(balance_by_carrier_t)
+    balance_by_carrier_t = reorder_columns(
+        balance_by_carrier_t,
+        ELECTRICITY_BALANCE_ORDER,
+    )
+
+    return balance_by_carrier_t
+
+
+def get_dk_heat_supply_by_carrier(n: pypsa.Network) -> tuple[pd.DataFrame, pd.Series | None]:
+    """
+    Return DK heat supply by carrier and DK heat demand.
+    """
+    heat_supply = pd.DataFrame(index=n.snapshots)
+    heat_load = None
+
+    if "DK_heat_demand" in n.loads_t.p_set.columns:
+        heat_load = n.loads_t.p_set["DK_heat_demand"]
+
+    for link in n.links.index[n.links.bus1 == "DK_heat"]:
+        carrier = map_carrier_to_display_name(n.links.at[link, "carrier"])
+
+        if carrier not in heat_supply.columns:
+            heat_supply[carrier] = 0.0
+
+        heat_supply[carrier] = heat_supply[carrier].add(
+            (-n.links_t.p1[link]).clip(lower=0.0),
+            fill_value=0.0,
+        )
+
+    heat_supply = drop_empty_carriers(heat_supply)
+    heat_supply = reorder_columns(heat_supply, HEAT_BALANCE_ORDER)
+
+    return heat_supply, heat_load
+
+
 # =========================================================
 # PLOTS
 # =========================================================
 
-def get_carrier_colors(n: pypsa.Network, columns: pd.Index) -> list[str]:
+def plot_denmark_dispatch_strategy(
+    n: pypsa.Network,
+    folder: Path,
+) -> None:
     """
-    Return colors for carriers based on n.carriers['color'].
+    Plot Denmark electricity dispatch, exchanges, and heat dispatch during the
+    winter week with highest average Danish electricity demand.
     """
-    fallback_color = "#999999"
-    colors = []
-
-    for carrier in columns:
-        if carrier in n.carriers.index and pd.notna(n.carriers.at[carrier, "color"]):
-            colors.append(n.carriers.at[carrier, "color"])
-        else:
-            colors.append(fallback_color)
-
-    return colors
-
-def plot_denmark_dispatch_strategy(n, folder):
-    """
-    Plot Denmark dispatch during the winter week with highest average
-    Danish electricity demand.
-
-    Includes:
-    - electricity generation
-    - battery charge/discharge
-    - gas-to-power and H2-to-power links
-    - electricity exchanges
-    - heat demand and heat supply
-    """
-
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
 
-    snapshots = n.snapshots
+    week_index = get_peak_winter_week_index(
+        n=n,
+        load_name="DK_electricity_demand",
+    )
 
-    winter_mask = (snapshots.month == 12) | (snapshots.month == 1)
+    electricity_balance = get_dk_electricity_balance_by_carrier(n).loc[week_index].copy()
+    electricity_balance = drop_empty_carriers(electricity_balance)
+    electricity_balance = reorder_columns(
+        electricity_balance,
+        ELECTRICITY_BALANCE_ORDER,
+    )
 
-    dk_load = n.loads_t.p_set["DK_electricity_demand"]
-    winter_load = dk_load[winter_mask]
+    heat_supply, heat_load = get_dk_heat_supply_by_carrier(n)
 
-    weekly_avg_load = winter_load.resample("W").mean()
-    max_load_week_end = weekly_avg_load.idxmax()
-    week_start = max_load_week_end - pd.Timedelta(days=6)
-    week_end = max_load_week_end
+    if not heat_supply.empty:
+        heat_supply_week = heat_supply.loc[week_index].copy()
+    else:
+        heat_supply_week = pd.DataFrame(index=week_index)
 
-    week_index = dk_load.loc[week_start:week_end].index
-    week_load = dk_load.loc[week_index]
+    if heat_load is not None:
+        heat_load_week = heat_load.loc[week_index]
+    else:
+        heat_load_week = None
 
-    # -------------------------------------------------
-    # Electricity supply at DK bus
-    # -------------------------------------------------
-    electricity_supply = {}
-
-    # Generators directly connected to DK
-    dk_generators = n.generators[n.generators.bus == "DK"]
-
-    for gen in dk_generators.index:
-        carrier = n.generators.at[gen, "carrier"]
-
-        electricity_supply.setdefault(
-            carrier, pd.Series(0.0, index=week_index)
-        )
-
-        electricity_supply[carrier] += n.generators_t.p[gen].loc[week_index]
-
-    # Links producing electricity into DK
-    link_supply_carriers = {
-        "DK_battery_discharger": "battery discharge",
-        "DK_CCGT": "gas CCGT",
-        "DK_H2_turbine": "H2 turbine",
-        "DK_H2_fuel_cell": "H2 fuel cell",
-    }
-
-    for link, carrier in link_supply_carriers.items():
-        if link in n.links.index and link in n.links_t.p1.columns:
-            electricity_supply.setdefault(
-                carrier, pd.Series(0.0, index=week_index)
-            )
-
-            # p1 is negative when power is delivered to bus1
-            electricity_supply[carrier] += (
-                -n.links_t.p1[link].loc[week_index]
-            ).clip(lower=0)
-
-    # Electricity consumption by links at DK bus
-    electricity_consumption = {}
-
-    link_consumption_carriers = {
-        "DK_battery_charger": "battery charge",
-        "DK_electrolyzer": "electrolysis",
-        "DK_ASHP": "heat pump electricity",
-        "DK_resistive_heater": "resistive heater electricity",
-    }
-
-    for link, carrier in link_consumption_carriers.items():
-        if link in n.links.index and link in n.links_t.p0.columns:
-            electricity_consumption[carrier] = (
-                n.links_t.p0[link].loc[week_index]
-            ).clip(lower=0)
-
-    # -------------------------------------------------
-    # Electricity exchanges
-    # -------------------------------------------------
     dk_lines = n.lines[(n.lines.bus0 == "DK") | (n.lines.bus1 == "DK")]
-
     exchanges = {}
 
     for line in dk_lines.index:
@@ -1244,179 +1387,117 @@ def plot_denmark_dispatch_strategy(n, folder):
         else:
             dk_exchange = flow
 
-        exchanges.setdefault(neighbour, pd.Series(0.0, index=week_index))
-        exchanges[neighbour] += dk_exchange
+        exchanges[neighbour] = dk_exchange
 
-    # -------------------------------------------------
-    # Heat sector
-    # -------------------------------------------------
-    heat_supply = {}
-    heat_load = None
+    output_data = pd.DataFrame(index=week_index)
 
-    if "DK_heat_demand" in n.loads.index:
-        heat_load = n.loads_t.p_set["DK_heat_demand"].loc[week_index]
+    for carrier in electricity_balance.columns:
+        output_data[f"DK electricity balance {carrier} [MW]"] = electricity_balance[carrier]
 
-    heat_links = {
-        "DK_ASHP": "heat pump",
-        "DK_resistive_heater": "resistive heater",
-        "DK_gas_boiler": "gas boiler",
-        "DK_water_tank_discharger": "heat storage discharge",
-    }
+    for neighbour, series in exchanges.items():
+        output_data[f"DK exchange with {neighbour} [MW]"] = series
 
-    for link, carrier in heat_links.items():
-        if link in n.links.index and link in n.links_t.p1.columns:
-            heat_supply[carrier] = (
-                -n.links_t.p1[link].loc[week_index]
-            ).clip(lower=0)
+    if heat_load_week is not None:
+        output_data["DK heat demand [MW]"] = heat_load_week
 
-    # -------------------------------------------------
-    # Plot
-    # -------------------------------------------------
+    for carrier in heat_supply_week.columns:
+        output_data[f"DK heat supply {carrier} [MW]"] = heat_supply_week[carrier]
+
+    output_data.to_csv(folder / "denmark_dispatch_strategy_winter_week.csv")
+
     fig, axes = plt.subplots(
-        3, 1,
-        figsize=(15, 11),
+        3,
+        1,
+        figsize=(11.5, 9.2),
         sharex=True,
-        gridspec_kw={"height_ratios": [3, 1.3, 2]},
+        gridspec_kw={"height_ratios": [3, 1.2, 2]},
     )
 
     ax1, ax2, ax3 = axes
 
-    colors = {
-        "solar": "#ffd92f",
-        "onwind": "#1b9e77",
-        "offwind": "#377eb8",
-        "gas CCGT": "#e41a1c",
-        "CCGT": "#e41a1c",
-        "coal": "#4d4d4d",
-        "nuclear": "#984ea3",
-        "battery discharge": "#ff7f00",
-        "H2 turbine": "#6FA8DC",
-        "H2 fuel cell": "#5E81AC",
-        "heat pump": "#A3BE8C",
-        "resistive heater": "#BF616A",
-        "gas boiler": "#A35D3D",
-        "heat storage discharge": "#81A1C1",
-    }
+    electricity_colors = get_carrier_colors(n, electricity_balance.columns)
 
-    electricity_order = [
-        "solar",
-        "onwind",
-        "offwind",
-        "gas CCGT",
-        "CCGT",
-        "coal",
-        "nuclear",
-        "battery discharge",
-        "H2 turbine",
-        "H2 fuel cell",
-    ]
-
-    electricity_order += [
-        c for c in electricity_supply if c not in electricity_order
-    ]
-
-    bottom = np.zeros(len(week_index))
-
-    for carrier in electricity_order:
-        if carrier not in electricity_supply:
-            continue
-
-        series = electricity_supply[carrier].fillna(0).values
-
-        ax1.fill_between(
-            week_index,
-            bottom,
-            bottom + series,
-            label=f"DK {carrier}",
-            color=colors.get(carrier),
-            alpha=0.85,
-        )
-
-        bottom += series
-
-    ax1.plot(
-        week_index,
-        week_load,
-        color="black",
-        linewidth=2.3,
-        label="DK electricity demand",
+    electricity_balance.plot.area(
+        stacked=True,
+        ax=ax1,
+        color=electricity_colors,
+        linewidth=0.0,
     )
 
-    for carrier, series in electricity_consumption.items():
-        ax1.plot(
-            week_index,
-            -series,
-            linestyle="--",
-            linewidth=1.8,
-            label=carrier,
-        )
+    ax1.set_ylabel("Power balance [MW]")
+    ax1.tick_params(axis="both", labelsize=REPORT_FONT_SIZE)
+    ax1.grid(axis="y", alpha=0.3)
+    ax1.set_axisbelow(True)
 
-    ax1.axhline(0, color="black", linewidth=0.8)
-    ax1.set_ylabel("Power [MW]")
-    ax1.set_title("Denmark electricity dispatch during peak winter week")
-    ax1.grid(True, alpha=0.3)
-    ax1.legend(loc="upper left", bbox_to_anchor=(1.01, 1))
+    y_max = max(
+        abs(float(electricity_balance.min().min())),
+        abs(float(electricity_balance.max().max())),
+    )
+    y_max = int(np.ceil(y_max / 500.0) * 500.0)
+    ax1.set_ylim(-y_max, y_max)
 
-    # Exchanges
+    ax1.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.30),
+        ncol=3,
+        frameon=True,
+        framealpha=0.95,
+    )
+
     exchange_colors = {
-        "DE": "#2ca02c",
-        "SE": "#ff7f0e",
-        "NO": "#1f77b4",
+        "DE": "#5AA469",
+        "SE": "#D08770",
+        "NO": "#2E86AB",
     }
 
     for neighbour, series in exchanges.items():
         ax2.plot(
             week_index,
-            series,
-            linewidth=2.2,
-            label=f"{neighbour}",
-            color=exchange_colors.get(neighbour),
+            series.values,
+            linewidth=2.0,
+            label=neighbour,
+            color=exchange_colors.get(neighbour, "#999999"),
         )
 
-    ax2.axhline(0, color="black", linewidth=1)
-    ax2.set_ylabel("Import / export [MW]")
-    ax2.grid(True, alpha=0.3)
-    ax2.legend(title="Exchange", loc="upper left", bbox_to_anchor=(1.01, 1))
+    ax2.axhline(0, color="black", linewidth=1.0)
+    ax2.set_ylabel("Exchange [MW]")
+    ax2.tick_params(axis="both", labelsize=REPORT_FONT_SIZE)
+    ax2.grid(axis="y", alpha=0.3)
+    ax2.set_axisbelow(True)
 
-    # Heat
-    if heat_load is not None and heat_supply:
-        heat_order = [
-            "heat pump",
-            "resistive heater",
-            "gas boiler",
-            "heat storage discharge",
-        ]
+    if exchanges:
+        ax2.legend(
+            loc="upper right",
+            ncol=3,
+            frameon=True,
+            framealpha=0.95,
+        )
 
-        bottom = np.zeros(len(week_index))
+    if heat_load_week is not None and not heat_supply_week.empty:
+        heat_colors = get_carrier_colors(n, heat_supply_week.columns)
 
-        for carrier in heat_order:
-            if carrier not in heat_supply:
-                continue
-
-            series = heat_supply[carrier].fillna(0).values
-
-            ax3.fill_between(
-                week_index,
-                bottom,
-                bottom + series,
-                label=f"DK {carrier}",
-                color=colors.get(carrier),
-                alpha=0.85,
-            )
-
-            bottom += series
+        heat_supply_week.plot.area(
+            stacked=True,
+            ax=ax3,
+            color=heat_colors,
+            linewidth=0.0,
+        )
 
         ax3.plot(
             week_index,
-            heat_load,
+            heat_load_week,
             color="black",
-            linewidth=2.3,
-            label="DK heat demand",
+            linewidth=2.2,
+            label="heat demand",
         )
 
-        ax3.set_ylabel("Heat [MW]")
-        ax3.set_title("Denmark heat dispatch")
-        ax3.legend(loc="upper left", bbox_to_anchor=(1.01, 1))
+        ax3.legend(
+            loc="upper right",
+            ncol=2,
+            frameon=True,
+            framealpha=0.95,
+        )
+
     else:
         ax3.text(
             0.5,
@@ -1425,122 +1506,78 @@ def plot_denmark_dispatch_strategy(n, folder):
             ha="center",
             va="center",
             transform=ax3.transAxes,
+            fontsize=REPORT_FONT_SIZE,
         )
-        ax3.set_ylabel("Heat [MW]")
 
-    ax3.grid(True, alpha=0.3)
+    ax3.set_ylabel("Heat [MW]")
     ax3.set_xlabel("Time")
+    ax3.tick_params(axis="both", labelsize=REPORT_FONT_SIZE)
+    ax3.grid(axis="y", alpha=0.3)
+    ax3.set_axisbelow(True)
 
-    plt.xticks(rotation=45)
-    plt.tight_layout()
+    fig.autofmt_xdate(rotation=0)
+    fig.tight_layout()
 
-    outfile = folder / "denmark_dispatch_strategy_winter_week_without_cap.png"
-    plt.savefig(outfile, dpi=300, bbox_inches="tight")
-    plt.close()
+    save_figure(fig, folder / "denmark_dispatch_strategy_winter_week.png")
+    plt.close(fig)
 
 
-def plot_annual_mix_from_balance(n: pypsa.Network, output_dir: Path) -> None:
+def plot_annual_mix_from_balance(
+    n: pypsa.Network,
+    output_dir: Path,
+) -> None:
     """
-    Plot annual Danish electricity mix only.
+    Plot annual Danish electricity mix from DK electricity balance.
     """
-
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    annual_mix = {}
+    balance = get_dk_electricity_balance_by_carrier(n)
+    positive_balance = balance.clip(lower=0.0)
 
-    # -----------------------------
-    # 1. DK generators
-    # -----------------------------
-    dk_generators = n.generators[n.generators.bus == "DK"]
+    annual_mix = positive_balance.sum(axis=0)
+    annual_mix = annual_mix[annual_mix > 1e-3]
+    annual_mix = annual_mix.reindex(
+        [carrier for carrier in POSITIVE_ELECTRICITY_ORDER if carrier in annual_mix.index]
+        + [carrier for carrier in annual_mix.index if carrier not in POSITIVE_ELECTRICITY_ORDER]
+    )
 
-    for gen in dk_generators.index:
-        carrier = n.generators.at[gen, "carrier"]
-
-        generation = n.generators_t.p[gen].clip(lower=0).sum()
-
-        annual_mix[carrier] = annual_mix.get(carrier, 0.0) + generation
-
-    # -----------------------------
-    # 2. Links producing electricity into DK
-    # -----------------------------
-    dk_electricity_links = n.links[n.links.bus1 == "DK"]
-
-    for link in dk_electricity_links.index:
-        carrier = n.links.at[link, "carrier"]
-
-        output_to_dk = (-n.links_t.p1[link]).clip(lower=0).sum()
-
-        annual_mix[carrier] = annual_mix.get(carrier, 0.0) + output_to_dk
-
-    annual_mix = pd.Series(annual_mix)
-
-    # -----------------------------
-    # Remove very small numerical values
-    # -----------------------------
-    tolerance = 1e-3
-    annual_mix = annual_mix[annual_mix > tolerance]
-
-    # -----------------------------
-    # Optional: manually exclude onshore wind
-    # -----------------------------
-    annual_mix = annual_mix.drop("onwind", errors="ignore")
-
-    # -----------------------------
-    # Get colors BEFORE renaming
-    # -----------------------------
     colors = get_carrier_colors(n, annual_mix.index)
 
-    # -----------------------------
-    # Nice labels for legend
-    # -----------------------------
-    label_map = {
-        "solar": "solar PV",
-        "onwind": "onshore wind",
-        "offwind": "offshore wind",
-        "gas CCGT": "gas CCGT",
-        "CCGT": "gas CCGT",
-        "coal": "coal",
-        "nuclear": "nuclear",
-        "battery discharger": "battery discharge",
-        "H2 turbine": "H2 turbine",
-        "H2 fuel cell": "H2 fuel cell",
-    }
+    fig, ax = plt.subplots(figsize=(8.8, 5.8))
 
-    labels = [label_map.get(carrier, carrier) for carrier in annual_mix.index]
-
-    fig, ax = plt.subplots(figsize=(6, 5))
-
-    wedges, texts, autotexts = ax.pie(
+    wedges, _, _ = ax.pie(
         annual_mix,
         colors=colors,
         labels=None,
         autopct="%1.1f%%",
         startangle=90,
-        wedgeprops={"edgecolor": "white"},
-        textprops={"color": "black"},
+        wedgeprops={"edgecolor": "white", "linewidth": 1.0},
+        textprops={"color": "black", "fontsize": REPORT_FONT_SIZE},
     )
 
     ax.legend(
         wedges,
-        labels,
-        title="Technology",
-        loc="lower right",
-        bbox_to_anchor=(1, 0),
-        fontsize=10,
+        annual_mix.index,
+        loc="center right",
+        bbox_to_anchor=(0.98, 0.5),
+        fontsize=REPORT_FONT_SIZE,
+        frameon=True,
+        framealpha=0.9,
     )
 
     fig.tight_layout()
-    fig.savefig(output_dir / "annual_danish_electricity_mix_without_cap.png", dpi=300)
+    save_figure(fig, output_dir / "annual_danish_electricity_mix.png")
     plt.close(fig)
 
 
-def plot_capacity_factors_over_year(n: pypsa.Network, output_dir: Path) -> None:
+def plot_capacity_factors_over_year(
+    n: pypsa.Network,
+    output_dir: Path,
+) -> None:
     """
     Plot monthly capacity factors for selected Danish electricity technologies.
-    Includes both generators and gas/H2/battery links producing electricity into DK.
     """
-
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1548,9 +1585,6 @@ def plot_capacity_factors_over_year(n: pypsa.Network, output_dir: Path) -> None:
 
     monthly_cf = {}
 
-    # -----------------------------
-    # 1. Danish generators
-    # -----------------------------
     generator_carriers = ["solar", "offwind", "coal", "nuclear", "gas CCGT"]
 
     gens = n.generators.index[
@@ -1559,27 +1593,23 @@ def plot_capacity_factors_over_year(n: pypsa.Network, output_dir: Path) -> None:
     ]
 
     for gen in gens:
-        carrier = n.generators.at[gen, "carrier"]
+        carrier = map_carrier_to_display_name(n.generators.at[gen, "carrier"])
         capacity = n.generators.at[gen, "p_nom_opt"]
 
         if capacity <= 1e-6:
             continue
 
-        generation = n.generators_t.p[gen].clip(lower=0)
+        generation = n.generators_t.p[gen].clip(lower=0.0)
         monthly_generation = generation.multiply(weights, axis=0).resample("ME").sum()
         monthly_hours = weights.resample("ME").sum()
 
-        cf = monthly_generation / (capacity * monthly_hours)
-        monthly_cf[carrier] = cf
+        monthly_cf[carrier] = monthly_generation / (capacity * monthly_hours)
 
-    # -----------------------------
-    # 2. Danish electricity-producing links
-    # -----------------------------
     link_map = {
-        "DK_CCGT": "gas CCGT",
+        "DK_CCGT": "CCGT",
         "DK_H2_turbine": "H2 turbine",
         "DK_H2_fuel_cell": "H2 fuel cell",
-        "DK_battery_discharger": "battery discharge",
+        "DK_battery_discharger": "battery discharger",
     }
 
     for link, label in link_map.items():
@@ -1591,66 +1621,48 @@ def plot_capacity_factors_over_year(n: pypsa.Network, output_dir: Path) -> None:
         if capacity <= 1e-6:
             continue
 
-        # p1 is negative when output is delivered to DK
-        output = (-n.links_t.p1[link]).clip(lower=0)
+        output = (-n.links_t.p1[link]).clip(lower=0.0)
 
         monthly_output = output.multiply(weights, axis=0).resample("ME").sum()
         monthly_hours = weights.resample("ME").sum()
 
-        cf = monthly_output / (capacity * monthly_hours)
-        monthly_cf[label] = cf
+        monthly_cf[label] = monthly_output / (capacity * monthly_hours)
 
     cf = pd.DataFrame(monthly_cf)
 
+    if cf.empty:
+        print("No capacity factor data available.")
+        return
+
     cf = cf.loc[:, cf.max() > 1e-6]
+    cf = reorder_columns(cf, POSITIVE_ELECTRICITY_ORDER)
 
-    color_keys = {
-        "solar": "solar",
-        "offwind": "offwind",
-        "coal": "coal",
-        "nuclear": "nuclear",
-        "gas CCGT": "CCGT",
-        "H2 turbine": "H2 turbine",
-        "H2 fuel cell": "H2 fuel cell",
-        "battery discharge": "battery discharger",
-    }
-
-    label_map = {
-        "solar": "solar PV",
-        "offwind": "offshore wind",
-        "coal": "coal",
-        "nuclear": "nuclear",
-        "gas CCGT": "gas CCGT",
-        "H2 turbine": "H2 turbine",
-        "H2 fuel cell": "H2 fuel cell",
-        "battery discharge": "battery discharge",
-    }
-
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, ax = plt.subplots(figsize=(8.8, 5.2))
 
     for column in cf.columns:
-        carrier_key = color_keys.get(column, column)
-
-        if carrier_key in n.carriers.index:
-            color = n.carriers.at[carrier_key, "color"]
-        else:
-            color = "#999999"
-
         ax.plot(
             cf.index,
             cf[column],
-            label=label_map.get(column, column),
-            color=color,
-            linewidth=2,
+            label=column,
+            color=get_carrier_color(n, column),
+            linewidth=2.0,
         )
 
     ax.set_ylabel("Capacity factor [-]")
     ax.set_xlabel("")
+    ax.tick_params(axis="both", labelsize=REPORT_FONT_SIZE)
+    ax.xaxis.get_offset_text().set_fontsize(REPORT_FONT_SIZE)
     ax.grid(axis="y", alpha=0.3)
-    ax.legend(loc="center left", bbox_to_anchor=(1, 0.5), title="Technology")
+    ax.set_axisbelow(True)
+
+    ax.legend(
+        loc="upper right",
+        frameon=True,
+        framealpha=0.95,
+    )
 
     fig.tight_layout()
-    fig.savefig(output_dir / "capacity_factors_over_year_dk_without_cap.png", dpi=300)
+    save_figure(fig, output_dir / "capacity_factors_over_year_dk.png")
     plt.close(fig)
 
 
@@ -1658,11 +1670,11 @@ def plot_capacity_factors_over_year(n: pypsa.Network, output_dir: Path) -> None:
 # RUN MODEL
 # =========================================================
 
-
 def main() -> None:
+    set_report_plot_style()
     silence_gurobi_logger()
 
-    scenario = SCENARIOS[ACTIVE_SCENARIO]
+    scenario = SCENARIOS[ACTIVE_SCENARIO].copy()
 
     print(f"\nRunning scenario: {ACTIVE_SCENARIO}")
     print(f"Scenario name: {scenario['name']}")
@@ -1670,13 +1682,13 @@ def main() -> None:
     print(f"Countries: {scenario['countries']}")
 
     cost_data = prepare_costs(
-        cost_file=FILE_PATHS["cost_file"],
+        cost_file=resolve_project_path(FILE_PATHS["cost_file"]),
         financial_parameters=FINANCIAL_PARAMETERS,
         number_of_years=FINANCIAL_PARAMETERS["nyears"],
     )
 
     all_timeseries_data = load_all_countries_timeseries(
-        timeseries_file=FILE_PATHS["timeseries_file"],
+        timeseries_file=resolve_project_path(FILE_PATHS["timeseries_file"]),
         countries=scenario["countries"],
         year=scenario["weather_year"],
     )
@@ -1685,7 +1697,7 @@ def main() -> None:
 
     if scenario["with_heat_sector"]:
         heat_timeseries = load_heat_timeseries(
-            heat_file=FILE_PATHS["heat_file"],
+            heat_file=resolve_project_path(FILE_PATHS["heat_file"]),
             countries=scenario["countries"],
             year=scenario["weather_year"],
         )
@@ -1698,31 +1710,35 @@ def main() -> None:
     )
 
     output_file = (
-            Path(FILE_PATHS["network_output_dir"])
-            / f"{scenario['name']}_{scenario['weather_year']}.nc"
+        resolve_project_path(FILE_PATHS["network_output_dir"])
+        / f"{scenario['name']}_{scenario['weather_year']}.nc"
     )
 
     optimize_and_save_network(
         n=n,
         output_file=output_file,
-        scenario=scenario
+        scenario=scenario,
     )
 
     print_model_summary(n)
 
     plot_denmark_dispatch_strategy(
         n=n,
-        folder=Path("results/experiments")
+        folder=OUTPUT_DIR,
     )
+
     plot_annual_mix_from_balance(
         n=n,
-        output_dir=Path("results/experiments"),
+        output_dir=OUTPUT_DIR,
     )
 
     plot_capacity_factors_over_year(
         n=n,
-        output_dir=Path("results/experiments"),
+        output_dir=OUTPUT_DIR,
     )
+
+    print(f"\nAnalysis complete. Results saved to {OUTPUT_DIR}")
+
 
 if __name__ == "__main__":
     main()

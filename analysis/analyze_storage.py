@@ -50,7 +50,6 @@ DISPLAY_NAME_TO_CARRIER = {
 DEFAULT_CARRIER_COLORS = {
     "AC": "#4C566A",
     "electricity": "#4C566A",
-
     "solar": "#EBCB3B",
     "onwind": "#5AA469",
     "onshore wind": "#5AA469",
@@ -60,7 +59,6 @@ DEFAULT_CARRIER_COLORS = {
     "CCGT": "#D08770",
     "coal": "#5C5C5C",
     "nuclear": "#8F6BB3",
-
     "battery": "#E67E22",
     "battery charger": "#C06C84",
     "battery discharger": "#6C5B7B",
@@ -95,6 +93,9 @@ SUMMARY_ORDER = [
 # =========================================================
 
 def set_report_plot_style() -> None:
+    """
+    Set report-ready matplotlib style.
+    """
     plt.rcParams.update(
         {
             "font.size": REPORT_FONT_SIZE,
@@ -111,6 +112,10 @@ def set_report_plot_style() -> None:
 
 
 def save_figure(fig: plt.Figure, output_path: Path) -> None:
+    """
+    Save figure as PNG and PDF.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     fig.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
 
@@ -120,14 +125,23 @@ def save_figure(fig: plt.Figure, output_path: Path) -> None:
 # =========================================================
 
 def ensure_output_dir(path: Path) -> None:
+    """
+    Create output directory if it does not exist.
+    """
     path.mkdir(parents=True, exist_ok=True)
 
 
 def get_network_path(network_name: str) -> Path:
+    """
+    Return path to a solved network file.
+    """
     return NETWORK_DIR / network_name
 
 
 def load_network(network_path: Path) -> pypsa.Network:
+    """
+    Load a PyPSA network from NetCDF.
+    """
     if not network_path.exists():
         raise FileNotFoundError(f"Network file not found: {network_path}")
 
@@ -156,6 +170,9 @@ def get_electricity_bus_carrier(network: pypsa.Network) -> str:
 
 
 def map_carrier_to_display_name(carrier: str) -> str:
+    """
+    Map model carrier names to report-friendly names.
+    """
     for display_name, aliases in CARRIER_ALIASES.items():
         if carrier in aliases:
             return display_name
@@ -164,6 +181,9 @@ def map_carrier_to_display_name(carrier: str) -> str:
 
 
 def get_color_lookup_candidates(carrier: str) -> list[str]:
+    """
+    Return possible carrier names for color lookup.
+    """
     candidates = []
 
     if carrier in DISPLAY_NAME_TO_CARRIER:
@@ -187,7 +207,13 @@ def get_color_lookup_candidates(carrier: str) -> list[str]:
     return clean_candidates
 
 
-def get_carrier_colors(network: pypsa.Network, carriers: pd.Index) -> list[str]:
+def get_carrier_colors(
+    network: pypsa.Network,
+    carriers: pd.Index | list[str],
+) -> list[str]:
+    """
+    Return colors for carriers.
+    """
     fallback_color = "#999999"
     colors = []
 
@@ -214,6 +240,9 @@ def get_carrier_colors(network: pypsa.Network, carriers: pd.Index) -> list[str]:
 
 
 def drop_empty_carriers(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop all-zero and all-NaN columns.
+    """
     df = df.dropna(axis=1, how="all")
     df = df.loc[:, (df.fillna(0.0).abs() > 0.0).any(axis=0)]
 
@@ -221,6 +250,9 @@ def drop_empty_carriers(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def reorder_carriers(df: pd.DataFrame, carrier_order: list[str]) -> pd.DataFrame:
+    """
+    Reorder DataFrame columns according to preferred carrier order.
+    """
     ordered = [carrier for carrier in carrier_order if carrier in df.columns]
     remaining = [carrier for carrier in df.columns if carrier not in ordered]
 
@@ -335,11 +367,12 @@ def plot_energy_balance_week(
         linewidth=0.0,
     )
 
-    ax.set_ylabel("Power balance [MW]", fontsize=REPORT_FONT_SIZE)
-    ax.set_xlabel("Time", fontsize=REPORT_FONT_SIZE)
+    ax.set_ylabel("Power balance [MW]")
+    ax.set_xlabel("Time")
     ax.tick_params(axis="both", labelsize=REPORT_FONT_SIZE)
     ax.xaxis.get_offset_text().set_fontsize(REPORT_FONT_SIZE)
     ax.grid(axis="y", alpha=0.3)
+    ax.set_axisbelow(True)
 
     ax.legend(
         loc="upper center",
@@ -426,7 +459,6 @@ def extract_battery_power_capacity(network: pypsa.Network) -> float:
         return 0.0
 
     links = network.links.copy()
-
     link_carriers = links["carrier"].fillna("")
 
     battery_power_mask = link_carriers.isin(
@@ -567,6 +599,222 @@ def print_comparison_table(comparison: pd.DataFrame) -> None:
 
 
 # =========================================================
+# BATTERY PERFORMANCE
+# =========================================================
+
+def find_battery_components(network: pypsa.Network) -> dict[str, list[str]]:
+    """
+    Find battery stores, charger links and discharger links.
+    """
+    battery_stores = []
+
+    if not network.stores.empty:
+        store_carrier_mask = network.stores["carrier"].fillna("").isin(["battery"])
+
+        store_bus_carriers = network.stores["bus"].map(network.buses["carrier"])
+        store_bus_mask = store_bus_carriers.fillna("").isin(["battery"])
+
+        battery_stores = list(network.stores.index[store_carrier_mask | store_bus_mask])
+
+    battery_chargers = []
+    battery_dischargers = []
+
+    if not network.links.empty:
+        battery_chargers = list(
+            network.links.index[
+                network.links["carrier"].fillna("").isin(["battery charger"])
+            ]
+        )
+
+        battery_dischargers = list(
+            network.links.index[
+                network.links["carrier"].fillna("").isin(["battery discharger"])
+            ]
+        )
+
+    return {
+        "stores": battery_stores,
+        "chargers": battery_chargers,
+        "dischargers": battery_dischargers,
+    }
+
+
+def calculate_battery_performance(network: pypsa.Network) -> pd.DataFrame:
+    """
+    Calculate battery performance indicators for each battery in the network.
+
+    The calculation assumes the usual model structure:
+    - {country}_battery_store
+    - {country}_battery_charger
+    - {country}_battery_discharger
+    """
+    components = find_battery_components(network)
+
+    rows = []
+
+    for store in components["stores"]:
+        prefix = store.replace("_battery_store", "")
+
+        charger = f"{prefix}_battery_charger"
+        discharger = f"{prefix}_battery_discharger"
+
+        if charger not in network.links.index or discharger not in network.links.index:
+            continue
+
+        energy_capacity_mwh = network.stores.at[store, "e_nom_opt"]
+        charge_power_mw = network.links.at[charger, "p_nom_opt"]
+        discharge_power_mw = network.links.at[discharger, "p_nom_opt"]
+
+        charge_input = network.links_t.p0[charger].clip(lower=0.0)
+        discharge_output = (-network.links_t.p1[discharger]).clip(lower=0.0)
+        state_of_charge = network.stores_t.e[store]
+
+        annual_charged_mwh = charge_input.sum()
+        annual_discharged_mwh = discharge_output.sum()
+
+        if annual_charged_mwh > 0.0:
+            operational_roundtrip_efficiency = (
+                annual_discharged_mwh / annual_charged_mwh
+            )
+        else:
+            operational_roundtrip_efficiency = 0.0
+
+        if energy_capacity_mwh > 0.0:
+            equivalent_full_cycles = annual_discharged_mwh / energy_capacity_mwh
+            mean_soc_pu = state_of_charge.mean() / energy_capacity_mwh
+            max_soc_pu = state_of_charge.max() / energy_capacity_mwh
+            min_soc_pu = state_of_charge.min() / energy_capacity_mwh
+        else:
+            equivalent_full_cycles = 0.0
+            mean_soc_pu = 0.0
+            max_soc_pu = 0.0
+            min_soc_pu = 0.0
+
+        charging_hours = int((charge_input > 1e-6).sum())
+        discharging_hours = int((discharge_output > 1e-6).sum())
+        idle_hours = int(
+            ((charge_input <= 1e-6) & (discharge_output <= 1e-6)).sum()
+        )
+
+        rows.append(
+            {
+                "battery": prefix,
+                "energy_capacity_mwh": energy_capacity_mwh,
+                "charge_power_mw": charge_power_mw,
+                "discharge_power_mw": discharge_power_mw,
+                "annual_charged_mwh": annual_charged_mwh,
+                "annual_discharged_mwh": annual_discharged_mwh,
+                "annual_charged_gwh": annual_charged_mwh / 1000.0,
+                "annual_discharged_gwh": annual_discharged_mwh / 1000.0,
+                "operational_roundtrip_efficiency": operational_roundtrip_efficiency,
+                "equivalent_full_cycles": equivalent_full_cycles,
+                "max_soc_mwh": state_of_charge.max(),
+                "mean_soc_mwh": state_of_charge.mean(),
+                "min_soc_mwh": state_of_charge.min(),
+                "max_soc_pu": max_soc_pu,
+                "mean_soc_pu": mean_soc_pu,
+                "min_soc_pu": min_soc_pu,
+                "max_charge_mw": charge_input.max(),
+                "max_discharge_mw": discharge_output.max(),
+                "charging_hours": charging_hours,
+                "discharging_hours": discharging_hours,
+                "idle_hours": idle_hours,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(rows).set_index("battery")
+
+
+def print_battery_performance(performance: pd.DataFrame) -> None:
+    """
+    Print battery performance summary and LaTeX rows.
+    """
+    print("\nBattery performance indicators:")
+
+    if performance.empty:
+        print("No battery performance data found.")
+        return
+
+    print(performance.round(3))
+
+    print("\nLaTeX-style battery performance rows:")
+    for battery, row in performance.iterrows():
+        print(
+            f"{battery} & "
+            f"{row['energy_capacity_mwh']:.1f} & "
+            f"{row['charge_power_mw']:.1f} & "
+            f"{row['discharge_power_mw']:.1f} & "
+            f"{row['annual_charged_gwh']:.1f} & "
+            f"{row['annual_discharged_gwh']:.1f} & "
+            f"{row['operational_roundtrip_efficiency']:.3f} & "
+            f"{row['equivalent_full_cycles']:.1f} & "
+            f"{row['mean_soc_pu']:.3f} \\\\"
+        )
+
+
+def print_battery_performance_latex_table(performance: pd.DataFrame) -> None:
+    """
+    Print a complete LaTeX table for the appendix.
+    """
+    if performance.empty:
+        return
+
+    print("\nComplete LaTeX appendix table:")
+    print(
+        r"""\begin{table}[H]
+\centering
+\caption{Battery performance indicators in the storage case.}
+\label{tab:battery_performance_appendix}
+\small
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{lrrrrrrrr}
+\toprule
+\textbf{Battery}
+& \textbf{Energy}
+& \textbf{Charge}
+& \textbf{Discharge}
+& \textbf{Charged}
+& \textbf{Discharged}
+& \textbf{RT eff.}
+& \textbf{Cycles}
+& \textbf{Mean SOC} \\
+\textbf{}
+& \textbf{[MWh]}
+& \textbf{[MW]}
+& \textbf{[MW]}
+& \textbf{[GWh]}
+& \textbf{[GWh]}
+& \textbf{[-]}
+& \textbf{[-]}
+& \textbf{[-]} \\
+\midrule"""
+    )
+
+    for battery, row in performance.iterrows():
+        print(
+            f"{battery} "
+            f"& {row['energy_capacity_mwh']:.1f} "
+            f"& {row['charge_power_mw']:.1f} "
+            f"& {row['discharge_power_mw']:.1f} "
+            f"& {row['annual_charged_gwh']:.1f} "
+            f"& {row['annual_discharged_gwh']:.1f} "
+            f"& {row['operational_roundtrip_efficiency']:.3f} "
+            f"& {row['equivalent_full_cycles']:.1f} "
+            f"& {row['mean_soc_pu']:.3f} \\\\"
+        )
+
+    print(
+        r"""\bottomrule
+\end{tabular}
+\end{table}"""
+    )
+
+
+# =========================================================
 # MAIN
 # =========================================================
 
@@ -578,6 +826,7 @@ def main() -> None:
     storage_network = load_network(storage_network_path)
 
     base_network_path = get_network_path(BASE_NETWORK_NAME)
+
     if base_network_path.exists():
         base_network = load_network(base_network_path)
     else:
@@ -626,6 +875,15 @@ def main() -> None:
 
     comparison.to_csv(OUTPUT_DIR / "battery_comparison_table.csv")
     print_comparison_table(comparison)
+
+    battery_performance = calculate_battery_performance(storage_network)
+
+    battery_performance.to_csv(
+        OUTPUT_DIR / "battery_performance_summary.csv"
+    )
+
+    print_battery_performance(battery_performance)
+    print_battery_performance_latex_table(battery_performance)
 
     print("\nStorage analysis finished.")
     print(f"Results saved to: {OUTPUT_DIR}")

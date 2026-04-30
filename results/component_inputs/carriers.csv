@@ -1,0 +1,28 @@
+name,color,co2_emissions
+AC,#4C566A,0.0
+solar,#EBCB3B,0.0
+onwind,#5AA469,0.0
+offwind,#2E86AB,0.0
+gas CCGT,#D08770,0.198
+coal,#5C5C5C,0.3361
+nuclear,#8F6BB3,0.0
+battery,#E67E22,0.0
+battery charger,#C06C84,0.0
+battery discharger,#6C5B7B,0.0
+CH4,#A35D3D,0.0
+CH4 supply,#8C564B,0.198
+CH4 pipeline,#7B4B2A,0.0
+CCGT,#D08770,0.0
+H2,#4DA3FF,0.0
+H2 store,#7FDBFF,0.0
+H2 pipeline,#2F6DB3,0.0
+electrolysis,#3A86FF,0.0
+H2 turbine,#6FA8DC,0.0
+H2 fuel cell,#5E81AC,0.0
+heat,#B48EAD,0.0
+heat pump,#A3BE8C,0.0
+resistive heater,#BF616A,0.0
+gas boiler,#A35D3D,0.198
+heat storage,#D8DEE9,0.0
+heat storage charger,#88C0D0,0.0
+heat storage discharger,#81A1C1,0.0

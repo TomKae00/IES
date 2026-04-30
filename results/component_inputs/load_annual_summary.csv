@@ -1,0 +1,9 @@
+name,bus,carrier,annual_demand_MWh,peak_demand_MW,mean_demand_MW
+DK_electricity_demand,DK,AC,32296169.25,5818.91,3676.704149590164
+DE_electricity_demand,DE,AC,486995370.0,76602.0,55441.18510928962
+SE_electricity_demand,SE,AC,138019033.0,26714.0,15712.54929417122
+NO_electricity_demand,NO,AC,132326666.41,26191.75,15064.511203324226
+DK_heat_demand,DK_heat,heat,42219552.0,13584.0,4806.415300546448
+DE_heat_demand,DE_heat,heat,575674033.5,207969.0,65536.66137295082
+SE_heat_demand,SE_heat,heat,84034217.5,27172.0,9566.736964936248
+NO_heat_demand,NO_heat,heat,42219552.0,13584.0,4806.415300546448

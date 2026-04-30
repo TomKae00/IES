@@ -1,0 +1,21 @@
+name,carrier
+DK,AC
+DE,AC
+SE,AC
+NO,AC
+DK_battery,battery
+DE_battery,battery
+SE_battery,battery
+NO_battery,battery
+DK_CH4,CH4
+DE_CH4,CH4
+SE_CH4,CH4
+NO_CH4,CH4
+DK_heat,heat
+DK_heat_storage,heat storage
+DE_heat,heat
+DE_heat_storage,heat storage
+SE_heat,heat
+SE_heat_storage,heat storage
+NO_heat,heat
+NO_heat_storage,heat storage

@@ -1,0 +1,9 @@
+name,bus,carrier,e_nom,e_nom_opt,e_nom_extendable,capital_cost,marginal_cost,standing_loss,e_cyclic
+DK_battery_store,DK_battery,battery,0.0,0.0,True,22386.922942136724,0.0,0.0,True
+DE_battery_store,DE_battery,battery,0.0,51121.6745919677,True,22386.922942136724,0.0,0.0,True
+SE_battery_store,SE_battery,battery,0.0,7477.20037682549,True,22386.922942136724,0.0,0.0,True
+NO_battery_store,NO_battery,battery,0.0,2913.360684630047,True,22386.922942136724,0.0,0.0,True
+DK_water_tank_store,DK_heat_storage,heat storage,0.0,0.0,True,47821.223694261214,0.0,0.021,True
+DE_water_tank_store,DE_heat_storage,heat storage,0.0,0.0,True,47821.223694261214,0.0,0.021,True
+SE_water_tank_store,SE_heat_storage,heat storage,0.0,0.0,True,47821.223694261214,0.0,0.021,True
+NO_water_tank_store,NO_heat_storage,heat storage,0.0,0.0,True,47821.223694261214,0.0,0.021,True

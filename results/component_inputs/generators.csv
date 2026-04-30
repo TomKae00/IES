@@ -1,0 +1,22 @@
+name,bus,carrier,p_nom,p_nom_opt,p_nom_extendable,p_nom_min,p_nom_max,capital_cost,marginal_cost,efficiency,p_min_pu,ramp_limit_up,ramp_limit_down
+DK_solar,DK,solar,0.0,0.0,True,0.0,inf,79356.58259808348,0.0134,1.0,0.0,,
+DK_onshore_wind,DK,onwind,0.0,0.0,True,0.0,inf,135624.35917903596,1.9035,1.0,0.0,,
+DK_offshore_wind,DK,offwind,0.0,0.0,True,0.0,inf,232062.96563555775,0.0267,1.0,0.0,,
+DK_coal,DK,coal,0.0,4680.069171063061,True,0.0,inf,423983.3261228014,26.067353932584272,0.356,0.0,,
+DK_nuclear,DK,nuclear,0.0,0.0,True,0.0,inf,947758.9752212986,27.322803680981593,0.326,0.5,0.3,0.3
+DE_solar,DE,solar,0.0,0.0,True,0.0,inf,79356.58259808348,0.0134,1.0,0.0,,
+DE_onshore_wind,DE,onwind,0.0,0.0,True,0.0,inf,135624.35917903596,1.9035,1.0,0.0,,
+DE_offshore_wind,DE,offwind,0.0,40213.730762798295,True,0.0,inf,232062.96563555775,0.0267,1.0,0.0,,
+DE_coal,DE,coal,0.0,56084.8898923824,True,0.0,inf,423983.3261228014,26.067353932584272,0.356,0.0,,
+DE_nuclear,DE,nuclear,0.0,0.0,True,0.0,inf,947758.9752212986,27.322803680981593,0.326,0.5,0.3,0.3
+SE_solar,SE,solar,0.0,0.0,True,0.0,inf,79356.58259808348,0.0134,1.0,0.0,,
+SE_onshore_wind,SE,onwind,0.0,17853.71012067662,True,0.0,inf,135624.35917903596,1.9035,1.0,0.0,,
+SE_offshore_wind,SE,offwind,0.0,0.0,True,0.0,inf,232062.96563555775,0.0267,1.0,0.0,,
+SE_coal,SE,coal,0.0,14542.519093879726,True,0.0,inf,423983.3261228014,26.067353932584272,0.356,0.0,,
+SE_nuclear,SE,nuclear,0.0,0.0,True,0.0,inf,947758.9752212986,27.322803680981593,0.326,0.5,0.3,0.3
+NO_solar,NO,solar,0.0,0.0,True,0.0,inf,79356.58259808348,0.0134,1.0,0.0,,
+NO_onshore_wind,NO,onwind,0.0,0.0,True,0.0,inf,135624.35917903596,1.9035,1.0,0.0,,
+NO_offshore_wind,NO,offwind,0.0,0.0,True,0.0,inf,232062.96563555775,0.0267,1.0,0.0,,
+NO_coal,NO,coal,0.0,17084.501260981626,True,0.0,inf,423983.3261228014,26.067353932584272,0.356,0.0,,
+NO_nuclear,NO,nuclear,0.0,0.0,True,0.0,inf,947758.9752212986,27.322803680981593,0.326,0.5,0.3,0.3
+NO_CH4_supply,NO_CH4,CH4 supply,0.0,221318.14656482893,True,0.0,inf,0.0,42.9003,1.0,0.0,,

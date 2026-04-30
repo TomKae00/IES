@@ -1,0 +1,7 @@
+name,bus0,bus1,carrier,s_nom,s_nom_opt,s_nom_extendable,capital_cost,x,r
+DK_NO,DK,NO,AC,1632.0,1632.0,False,0.0,0.1,0.0
+DK_SE,DK,SE,AC,2415.0,2415.0,False,0.0,0.1,0.0
+DK_DE,DK,DE,AC,3500.0,3500.0,False,0.0,0.1,0.0
+DE_SE,DE,SE,AC,615.0,615.0,False,0.0,0.1,0.0
+NO_SE,NO,SE,AC,3645.0,3645.0,False,0.0,0.1,0.0
+DE_NO,DE,NO,AC,1400.0,1400.0,False,0.0,0.1,0.0

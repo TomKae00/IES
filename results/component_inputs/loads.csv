@@ -1,0 +1,9 @@
+name,bus,carrier,p_set
+DK_electricity_demand,DK,AC,0.0
+DE_electricity_demand,DE,AC,0.0
+SE_electricity_demand,SE,AC,0.0
+NO_electricity_demand,NO,AC,0.0
+DK_heat_demand,DK_heat,heat,0.0
+DE_heat_demand,DE_heat,heat,0.0
+SE_heat_demand,SE_heat,heat,0.0
+NO_heat_demand,NO_heat,heat,0.0

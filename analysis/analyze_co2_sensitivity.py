@@ -194,6 +194,22 @@ def carrier_order(columns):
     ]
 
 
+def get_carrier_colors(n: pypsa.Network, columns: pd.Index) -> list[str]:
+    """
+    Return colors for carriers based on n.carriers['color'].
+    """
+    fallback_color = "#999999"
+    colors = []
+
+    for carrier in columns:
+        if carrier in n.carriers.index and pd.notna(n.carriers.at[carrier, "color"]):
+            colors.append(n.carriers.at[carrier, "color"])
+        else:
+            colors.append(fallback_color)
+
+    return colors
+
+
 def plot_weekly_dispatch(
     n: pypsa.Network,
     week_start: str = "2016-01-01",
@@ -212,26 +228,36 @@ def plot_weekly_dispatch(
         return
 
     dispatch = n.generators_t.p.loc[week_snapshots].copy()
-
     carrier_dispatch = pd.DataFrame(index=dispatch.index)
 
     for carrier in n.generators.carrier.unique():
         gens = n.generators.index[n.generators.carrier == carrier]
-
         available_gens = [g for g in gens if g in dispatch.columns]
 
         if available_gens:
-            carrier_dispatch[carrier] = dispatch[available_gens].clip(lower=0).sum(axis=1)
+            carrier_dispatch[carrier] = (
+                dispatch[available_gens]
+                .clip(lower=0)
+                .sum(axis=1)
+            )
 
-    carrier_dispatch = carrier_dispatch.loc[:, carrier_dispatch.sum() > 0]
+    carrier_dispatch = carrier_dispatch.loc[:, carrier_dispatch.sum() > 1e-6]
     carrier_dispatch = carrier_dispatch[carrier_order(carrier_dispatch.columns)]
 
     if carrier_dispatch.empty:
         print("No dispatch data to plot.")
         return
 
+    colors = get_carrier_colors(n, carrier_dispatch.columns)
+
     fig, ax = plt.subplots(figsize=(13, 5))
-    carrier_dispatch.plot.area(ax=ax, stacked=True, linewidth=0)
+
+    carrier_dispatch.plot.area(
+        ax=ax,
+        stacked=True,
+        linewidth=0,
+        color=colors,
+    )
 
     ax.set_title(title)
     ax.set_ylabel("Dispatch [MW]")
@@ -241,7 +267,14 @@ def plot_weekly_dispatch(
 
     plt.tight_layout()
 
-    filename = title.lower().replace(" ", "_").replace("%", "pct").replace(".", "") + ".png"
+    filename = (
+        title.lower()
+        .replace(" ", "_")
+        .replace("%", "pct")
+        .replace(".", "")
+        + ".png"
+    )
+
     fig.savefig(output_dir / filename, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -391,36 +424,54 @@ def run_co2_sensitivity_analysis(
     return results_df, cost_data, n_baseline
 
 
-def plot_co2_sensitivity(results_df: pd.DataFrame, output_dir: Path = OUTPUT_DIR):
+def plot_co2_sensitivity(
+    results_df: pd.DataFrame,
+    n_baseline: pypsa.Network,
+    output_dir: Path = OUTPUT_DIR,
+):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     plot_df = results_df[np.isfinite(results_df["co2_cap_mt"])].copy()
 
-    # Add reduction labels
-    plot_df["co2_reduction_pct"] = (1 - plot_df["co2_cap_fraction"]) * 100
+    plot_df["co2_reduction_pct"] = (
+        1 - plot_df["co2_cap_fraction"]
+    ) * 100
 
     plot_df = plot_df.sort_values("co2_cap_mt")
 
     baseline = results_df[results_df["co2_cap_fraction"] == 1.0].iloc[0]
 
-    target_fraction = 0.30   # 70% reduction means 30% of baseline emissions remain
+    target_fraction = 0.30
     target_cap_mt = baseline["actual_emissions_mt"] * target_fraction
 
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10), constrained_layout=True)
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(15, 10),
+        constrained_layout=True,
+    )
 
     def format_x_axis(ax):
         ax.set_xlabel("CO2 cap [Mt CO2/year]\nReduction from baseline [%]")
+
         ticks = plot_df["co2_cap_mt"].values
         labels = [
             f"{cap:.2f}\n{red:.0f}%"
-            for cap, red in zip(plot_df["co2_cap_mt"], plot_df["co2_reduction_pct"])
+            for cap, red in zip(
+                plot_df["co2_cap_mt"],
+                plot_df["co2_reduction_pct"],
+            )
         ]
+
         ax.set_xticks(ticks)
         ax.set_xticklabels(labels, rotation=0)
 
-        # 70% reduction target line
         ax.axvline(
             target_cap_mt,
             linestyle=":",
             linewidth=2,
+            color="black",
             label="70% reduction target",
         )
 
@@ -434,11 +485,27 @@ def plot_co2_sensitivity(results_df: pd.DataFrame, output_dir: Path = OUTPUT_DIR
         if c.startswith("generation_") and c.endswith("_mwh")
     ]
 
+    generation_carriers = [
+        c.replace("generation_", "").replace("_mwh", "")
+        for c in generation_cols
+    ]
+
+    generation_carriers = carrier_order(generation_carriers)
+
     bottom = np.zeros(len(plot_df))
 
-    for col in sorted(generation_cols):
-        carrier = col.replace("generation_", "").replace("_mwh", "")
+    for carrier in generation_carriers:
+        col = f"generation_{carrier}_mwh"
+
+        if col not in plot_df.columns:
+            continue
+
         values = plot_df[col].fillna(0).values / 1000
+
+        if np.all(values <= 1e-6):
+            continue
+
+        color = get_carrier_colors(n_baseline, pd.Index([carrier]))[0]
 
         ax.fill_between(
             plot_df["co2_cap_mt"],
@@ -446,6 +513,7 @@ def plot_co2_sensitivity(results_df: pd.DataFrame, output_dir: Path = OUTPUT_DIR
             bottom + values,
             alpha=0.75,
             label=carrier,
+            color=color,
         )
 
         bottom += values
@@ -466,17 +534,19 @@ def plot_co2_sensitivity(results_df: pd.DataFrame, output_dir: Path = OUTPUT_DIR
         plot_df["system_cost_eur"] / 1e9,
         marker="o",
         linewidth=2,
+        color="black",
     )
 
     ax.axhline(
         baseline["system_cost_eur"] / 1e9,
         linestyle="--",
         alpha=0.6,
+        color="black",
         label="Baseline",
     )
 
     ax.set_title("System cost vs CO2 cap")
-    ax.set_ylabel("System cost [€bn/year]")
+    ax.set_ylabel("System cost [bn€/year]")
     ax.grid(alpha=0.25)
     format_x_axis(ax)
     ax.legend()
@@ -491,6 +561,7 @@ def plot_co2_sensitivity(results_df: pd.DataFrame, output_dir: Path = OUTPUT_DIR
         plot_df["actual_emissions_mt"],
         marker="o",
         linewidth=2,
+        color="black",
         label="Actual emissions",
     )
 
@@ -498,6 +569,7 @@ def plot_co2_sensitivity(results_df: pd.DataFrame, output_dir: Path = OUTPUT_DIR
         plot_df["co2_cap_mt"],
         plot_df["co2_cap_mt"],
         linestyle="--",
+        color="gray",
         label="CO2 cap",
     )
 
@@ -505,9 +577,10 @@ def plot_co2_sensitivity(results_df: pd.DataFrame, output_dir: Path = OUTPUT_DIR
         baseline["actual_emissions_mt"],
         linestyle=":",
         alpha=0.6,
+        color="black",
         label="Baseline",
     )
-
+    
     ax.set_title("Actual emissions vs CO2 cap")
     ax.set_ylabel("Emissions [Mt CO2/year]")
     ax.grid(alpha=0.25)
@@ -524,25 +597,52 @@ def plot_co2_sensitivity(results_df: pd.DataFrame, output_dir: Path = OUTPUT_DIR
         if c.startswith("capacity_") and c.endswith("_mw")
     ]
 
-    for col in sorted(capacity_cols):
-        carrier = col.replace("capacity_", "").replace("_mw", "")
+    capacity_carriers = [
+        c.replace("capacity_", "").replace("_mw", "")
+        for c in capacity_cols
+    ]
+
+    capacity_carriers = carrier_order(capacity_carriers)
+
+    for carrier in capacity_carriers:
+        col = f"capacity_{carrier}_mw"
+
+        if col not in plot_df.columns:
+            continue
+
+        values = plot_df[col].fillna(0).values
+
+        if np.all(values <= 1e-6):
+            continue
+
+        color = get_carrier_colors(n_baseline, pd.Index([carrier]))[0]
 
         ax.plot(
             plot_df["co2_cap_mt"],
-            plot_df[col].fillna(0),
+            values,
             marker="o",
             linewidth=2,
             label=carrier,
+            color=color,
         )
 
     if "battery_energy_mwh" in plot_df.columns:
-        ax.plot(
-            plot_df["co2_cap_mt"],
-            plot_df["battery_energy_mwh"].fillna(0),
-            marker="s",
-            linewidth=2,
-            label="battery energy [MWh]",
-        )
+        values = plot_df["battery_energy_mwh"].fillna(0).values
+
+        if np.any(values > 1e-6):
+            battery_color = get_carrier_colors(
+                n_baseline,
+                pd.Index(["battery"]),
+            )[0]
+
+            ax.plot(
+                plot_df["co2_cap_mt"],
+                values,
+                marker="s",
+                linewidth=2,
+                label="battery energy [MWh]",
+                color=battery_color,
+            )
 
     ax.set_title("Capacity mix vs CO2 cap")
     ax.set_ylabel("Capacity [MW] / Battery energy [MWh]")
@@ -636,7 +736,7 @@ def main():
 
     file_paths = {
         "cost_file": f"Data/costs_{financial_parameters['year']}.csv",
-        "timeseries_file": "Data\\time_series_60min_singleindex_filtered_2015-2020.csv",
+        "timeseries_file": "Data//time_series_60min_singleindex_filtered_2015-2020.csv",
     }
 
     results_df, cost_data, n_baseline = run_co2_sensitivity_analysis(
@@ -652,7 +752,11 @@ def main():
 
     print(f"\nSaved results to {OUTPUT_DIR / 'co2_sensitivity_results.csv'}")
 
-    plot_co2_sensitivity(results_df, OUTPUT_DIR)
+    plot_co2_sensitivity(
+        results_df=results_df,
+        n_baseline=n_baseline,
+        output_dir=OUTPUT_DIR,
+    )
 
     print_summary(
         results_df=results_df,

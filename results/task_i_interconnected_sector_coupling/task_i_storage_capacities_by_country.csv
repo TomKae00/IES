@@ -1,0 +1,9 @@
+country,technology,component,energy_capacity_MWh
+DK,battery,DK_battery_store,33044.633522126984
+DE,battery,DE_battery_store,228921.29780212065
+SE,battery,SE_battery_store,37941.69887768211
+NO,battery,NO_battery_store,13177.592864086968
+DK,heat storage,DK_water_tank_store,0.0
+DE,heat storage,DE_water_tank_store,0.0
+SE,heat storage,SE_water_tank_store,0.0
+NO,heat storage,NO_water_tank_store,0.0

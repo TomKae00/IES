@@ -1,0 +1,22 @@
+country,technology,component,capacity_MW
+DK,solar,DK_solar,23265.359688810648
+DK,onwind,DK_onshore_wind,0.0
+DK,offwind,DK_offshore_wind,7680.896490055778
+DK,coal,DK_coal,0.0
+DK,nuclear,DK_nuclear,647.8126925009536
+DE,solar,DE_solar,0.0
+DE,onwind,DE_onshore_wind,20609.19369648978
+DE,offwind,DE_offshore_wind,68838.57703458754
+DE,coal,DE_coal,0.0
+DE,nuclear,DE_nuclear,64800.15080384179
+SE,solar,SE_solar,0.0
+SE,onwind,SE_onshore_wind,76285.94727137363
+SE,offwind,SE_offshore_wind,0.0
+SE,coal,SE_coal,0.0
+SE,nuclear,SE_nuclear,9219.471387532354
+NO,solar,NO_solar,0.0
+NO,onwind,NO_onshore_wind,0.0
+NO,offwind,NO_offshore_wind,0.0
+NO,coal,NO_coal,0.0
+NO,nuclear,NO_nuclear,21671.40179512227
+NO,CH4 supply,NO_CH4_supply,112885.08262956477

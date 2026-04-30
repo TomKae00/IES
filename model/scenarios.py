@@ -23,7 +23,7 @@ SCENARIOS = {
     # -----------------------------------------------------
     "base": {
         "name": "base_DK",
-        "weather_year": "2016",
+        "weather_year": "2019",
         "countries": ["DK"],
 
         "with_battery_storage": False,
@@ -35,7 +35,7 @@ SCENARIOS = {
         "with_heat_sector": False,
         "with_heat_storage": False,
 
-        "co2_price": 80.0,
+        "co2_price": 73.0,
         "co2_limit": None,
     },
 
@@ -56,7 +56,7 @@ SCENARIOS = {
         "with_heat_sector": False,
         "with_heat_storage": False,
 
-        "co2_price": 80.0,
+        "co2_price": 73.0,
         "co2_limit": None,
     },
 
@@ -68,7 +68,7 @@ SCENARIOS = {
         "weather_year": "2016",
         "countries": ["DK", "DE", "SE", "NO"],
 
-        "with_battery_storage": False,
+        "with_battery_storage": True,
         "with_interconnectors": True,
 
         "with_ch4_network": False,
@@ -77,7 +77,7 @@ SCENARIOS = {
         "with_heat_sector": False,
         "with_heat_storage": False,
 
-        "co2_price": 80.0,
+        "co2_price": 73.0,
         "co2_limit": None,
     },
 

@@ -1,4 +1,4 @@
-import pathlib
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -6,20 +6,189 @@ import pandas as pd
 import pypsa
 
 
-def load_network(network_file):
-    """Load the PyPSA network from a NetCDF file."""
-    return pypsa.Network(network_file)
+# =========================================================
+# CONFIG
+# =========================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+NETWORK_DIR = PROJECT_ROOT / "results" / "networks"
+OUTPUT_DIR = PROJECT_ROOT / "results" / "interconnected"
+
+WEATHER_YEAR = 2016
+NETWORK_NAME = f"interconnected_{WEATHER_YEAR}.nc"
+
+REPORT_FONT_SIZE = 14
+
+CARRIER_ALIASES = {
+    "solar": ["solar"],
+    "onshore wind": ["onwind", "onshore wind", "wind_onshore", "onshore"],
+    "offshore wind": ["offwind", "offshore wind", "wind_offshore", "offshore"],
+    "CCGT": ["gas CCGT", "CCGT", "ccgt", "gas"],
+    "coal": ["coal"],
+    "nuclear": ["nuclear"],
+    "electricity": ["electricity", "AC"],
+    "battery charger": ["battery charger", "battery_charger"],
+    "battery discharger": ["battery discharger", "battery_discharge", "battery_discharger"],
+}
+
+DEFAULT_CARRIER_COLORS = {
+    "electricity": "#4C566A",
+    "AC": "#4C566A",
+    "solar": "#EBCB3B",
+    "onshore wind": "#5AA469",
+    "onwind": "#5AA469",
+    "offshore wind": "#2E86AB",
+    "offwind": "#2E86AB",
+    "CCGT": "#D08770",
+    "gas": "#D08770",
+    "gas CCGT": "#D08770",
+    "coal": "#5C5C5C",
+    "nuclear": "#8F6BB3",
+    "battery charger": "#C06C84",
+    "battery discharger": "#6C5B7B",
+}
+
+GENERATION_STACK_ORDER = [
+    "solar",
+    "offshore wind",
+    "onshore wind",
+    "CCGT",
+    "coal",
+    "nuclear",
+    "battery discharger",
+]
+
+ENERGY_BALANCE_ORDER = [
+    "electricity",
+    "battery charger",
+    "solar",
+    "offshore wind",
+    "onshore wind",
+    "CCGT",
+    "coal",
+    "nuclear",
+    "battery discharger",
+]
+
+EXCHANGE_COLORS = {
+    "DE": "#5AA469",
+    "SE": "#D08770",
+    "NO": "#2E86AB",
+}
 
 
-def create_analysis_folder(project_root):
-    """Create the results/task_d_analysis folder if it does not exist."""
-    folder = project_root / "results" / "task_d_analysis"
+# =========================================================
+# PLOT STYLE
+# =========================================================
+
+def set_report_plot_style() -> None:
+    """
+    Set basic report-ready matplotlib style.
+    """
+    plt.rcParams.update(
+        {
+            "font.size": REPORT_FONT_SIZE,
+            "axes.labelsize": REPORT_FONT_SIZE,
+            "xtick.labelsize": REPORT_FONT_SIZE,
+            "ytick.labelsize": REPORT_FONT_SIZE,
+            "legend.fontsize": REPORT_FONT_SIZE,
+            "figure.dpi": 150,
+            "savefig.dpi": 300,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+        }
+    )
+
+
+def save_figure(fig: plt.Figure, output_path: Path) -> None:
+    """
+    Save figure as PNG and PDF.
+    """
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    fig.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
+
+
+# =========================================================
+# GENERAL HELPERS
+# =========================================================
+
+def load_network(network_file: Path) -> pypsa.Network:
+    """
+    Load the PyPSA network from a NetCDF file.
+    """
+    if not network_file.exists():
+        raise FileNotFoundError(f"Network file not found: {network_file}")
+
+    network = pypsa.Network(network_file)
+    network.sanitize()
+
+    return network
+
+
+def create_analysis_folder(project_root: Path) -> Path:
+    """
+    Create the results/interconnected folder if it does not exist.
+    """
+    folder = project_root / "results" / "interconnected"
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 
 
-def print_system_summary(n):
-    """Print a short system summary."""
+def map_carrier_to_display_name(carrier: str) -> str:
+    """
+    Map internal model carrier names to report-friendly names.
+    """
+    for display_name, aliases in CARRIER_ALIASES.items():
+        if carrier in aliases:
+            return display_name
+
+    return carrier
+
+
+def get_carrier_color(carrier: str) -> str:
+    """
+    Return report color for a carrier.
+    """
+    display_name = map_carrier_to_display_name(carrier)
+
+    if display_name in DEFAULT_CARRIER_COLORS:
+        return DEFAULT_CARRIER_COLORS[display_name]
+
+    if carrier in DEFAULT_CARRIER_COLORS:
+        return DEFAULT_CARRIER_COLORS[carrier]
+
+    return "#999999"
+
+
+def drop_empty_carriers(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop all-zero and all-NaN columns.
+    """
+    df = df.dropna(axis=1, how="all")
+    df = df.loc[:, (df.fillna(0.0).abs() > 0.0).any(axis=0)]
+
+    return df
+
+
+def reorder_columns(df: pd.DataFrame, order: list[str]) -> pd.DataFrame:
+    """
+    Reorder columns according to a preferred order while keeping remaining columns.
+    """
+    ordered = [column for column in order if column in df.columns]
+    remaining = [column for column in df.columns if column not in ordered]
+
+    return df[ordered + remaining]
+
+
+# =========================================================
+# SYSTEM SUMMARY
+# =========================================================
+
+def print_system_summary(n: pypsa.Network) -> None:
+    """
+    Print a short system summary.
+    """
     print("System Summary:")
     print(f"- Buses: {len(n.buses)}")
     print(f"- Lines: {len(n.lines)}")
@@ -46,8 +215,14 @@ def print_system_summary(n):
     print(f"- Closed cycle DK-SE-DE-DK: {'Yes' if has_cycle else 'No'}")
 
 
-def save_line_summary(n, folder):
-    """Save line_summary.csv with line capacity and utilisation indicators."""
+# =========================================================
+# TABLE EXPORTS
+# =========================================================
+
+def save_line_summary(n: pypsa.Network, folder: Path) -> None:
+    """
+    Save line_summary.csv with line capacity and utilisation indicators.
+    """
     lines = n.lines.copy()
     flows = n.lines_t.p0
 
@@ -70,8 +245,10 @@ def save_line_summary(n, folder):
     summary.to_csv(folder / "line_summary.csv", index=False)
 
 
-def save_dk_battery_kpis(n, folder):
-    """Save dk_battery_kpis.csv with optimized battery capacities and annual flows."""
+def save_dk_battery_kpis(n: pypsa.Network, folder: Path) -> None:
+    """
+    Save dk_battery_kpis.csv with optimized battery capacities and annual flows.
+    """
     required_store = "DK_battery_store"
     required_charger = "DK_battery_charger"
     required_discharger = "DK_battery_discharger"
@@ -114,9 +291,14 @@ def save_dk_battery_kpis(n, folder):
 
     kpis.to_csv(folder / "dk_battery_kpis.csv", index=False)
 
+    print("\nDK Battery KPIs:")
+    print(kpis.round(3).to_string(index=False))
 
-def create_line_loading_summary(n, folder):
-    """Create and save a line loading summary table."""
+
+def create_line_loading_summary(n: pypsa.Network, folder: Path) -> None:
+    """
+    Create and save a line loading summary table.
+    """
     line_labels = {
         "DK_NO": "DK-NO",
         "DK_SE": "DK-SE",
@@ -169,12 +351,246 @@ def create_line_loading_summary(n, folder):
         float_format="%.1f",
     )
 
-    with open(folder / "line_loading_summary.tex", "w") as f:
-        f.write(latex_str)
+    with open(folder / "line_loading_summary.tex", "w") as file:
+        file.write(latex_str)
 
 
-def plot_interconnector_summary(n, folder):
-    """Create interconnector_summary.png and save the underlying data."""
+def save_data_for_last_step(n: pypsa.Network, folder: Path) -> None:
+    """
+    Save first-timestep data for the analytical PTDF verification.
+
+    This function exports:
+    - PyPSA line flows p0 for the selected line order
+    - line capacities and loading
+    - nodal injections implied by the PyPSA line flows
+    - the incidence matrix used for the manual PTDF calculation
+
+    PyPSA convention:
+    p0 > 0 means flow from bus0 to bus1.
+    """
+    first_ts = n.snapshots[0]
+
+    bus_order = ["DK", "DE", "NO", "SE"]
+    line_order = ["DK_DE", "DK_NO", "DK_SE", "DE_NO", "DE_SE", "NO_SE"]
+
+    missing_lines = [line for line in line_order if line not in n.lines.index]
+    missing_buses = [bus for bus in bus_order if bus not in n.buses.index]
+
+    if missing_lines:
+        raise KeyError(
+            f"Missing lines in network: {missing_lines}\n"
+            f"Available lines are: {list(n.lines.index)}"
+        )
+
+    if missing_buses:
+        raise KeyError(
+            f"Missing buses in network: {missing_buses}\n"
+            f"Available buses are: {list(n.buses.index)}"
+        )
+
+    # -----------------------------------------------------
+    # Export PyPSA line flows
+    # -----------------------------------------------------
+    line_rows = []
+
+    for line in line_order:
+        bus0 = n.lines.loc[line, "bus0"]
+        bus1 = n.lines.loc[line, "bus1"]
+        flow = n.lines_t.p0.loc[first_ts, line]
+        capacity = n.lines.loc[line, "s_nom"]
+        loading = abs(flow) / capacity * 100
+
+        line_rows.append(
+            {
+                "Line": line.replace("_", "-"),
+                "bus0": bus0,
+                "bus1": bus1,
+                "PyPSA flow p0 [MW]": flow,
+                "Line capacity [MW]": capacity,
+                "Loading [%]": loading,
+            }
+        )
+
+    line_df = pd.DataFrame(line_rows)
+    line_df.to_csv(folder / "first_timestep_line_flows.csv", index=False)
+
+    print("\nFirst timestep:")
+    print(first_ts)
+
+    print("\nPyPSA line flows at first timestep:")
+    print(line_df.round(3).to_string(index=False))
+
+    # -----------------------------------------------------
+    # Build incidence matrix K with +1 at bus0 and -1 at bus1
+    # -----------------------------------------------------
+    K = pd.DataFrame(
+        0.0,
+        index=bus_order,
+        columns=[line.replace("_", "-") for line in line_order],
+    )
+
+    for line in line_order:
+        label = line.replace("_", "-")
+        bus0 = n.lines.loc[line, "bus0"]
+        bus1 = n.lines.loc[line, "bus1"]
+
+        K.loc[bus0, label] = 1.0
+        K.loc[bus1, label] = -1.0
+
+    flow_vector = line_df.set_index("Line")["PyPSA flow p0 [MW]"]
+    implied_injection = K @ flow_vector
+
+    bus_df = pd.DataFrame(
+        {
+            "Bus": implied_injection.index,
+            "Nodal injection implied by line flows [MW]": implied_injection.values,
+        }
+    )
+
+    bus_df.to_csv(folder / "first_timestep_bus_injections_from_flows.csv", index=False)
+    K.to_csv(folder / "first_timestep_incidence_matrix.csv")
+
+    print("\nNodal injections implied by PyPSA line flows:")
+    print(bus_df.round(3).to_string(index=False))
+
+    # -----------------------------------------------------
+    # Optional: PTDF verification inside Python
+    # -----------------------------------------------------
+    x = 0.1
+    b = 1.0 / x
+
+    K_np = K.values
+    B_l = np.eye(len(line_order)) * b
+
+    slack_bus = "DK"
+    non_slack_buses = [bus for bus in bus_order if bus != slack_bus]
+
+    K_red = K.loc[non_slack_buses].values
+    L_red = K_red @ B_l @ K_red.T
+    L_red_inv = np.linalg.inv(L_red)
+
+    p_red = bus_df.set_index("Bus").loc[non_slack_buses, "Nodal injection implied by line flows [MW]"].values
+
+    # With K convention (+1 at bus0, -1 at bus1), this gives PyPSA p0 sign convention.
+    theta_red = L_red_inv @ p_red
+    manual_flows = B_l @ K_red.T @ theta_red
+
+    verification_df = line_df[["Line", "PyPSA flow p0 [MW]"]].copy()
+    verification_df["Manual PTDF flow [MW]"] = manual_flows
+    verification_df["Difference [MW]"] = (
+        verification_df["Manual PTDF flow [MW]"]
+        - verification_df["PyPSA flow p0 [MW]"]
+    )
+
+    verification_df.to_csv(folder / "first_timestep_ptdf_verification.csv", index=False)
+
+    print("\nPTDF verification using PyPSA-implied nodal injections:")
+    print(verification_df.round(6).to_string(index=False))
+
+    print(
+        "\nSaved first-timestep PTDF verification data to:\n"
+        f"- {folder / 'first_timestep_line_flows.csv'}\n"
+        f"- {folder / 'first_timestep_bus_injections_from_flows.csv'}\n"
+        f"- {folder / 'first_timestep_incidence_matrix.csv'}\n"
+        f"- {folder / 'first_timestep_ptdf_verification.csv'}"
+    )
+
+
+# =========================================================
+# ENERGY BALANCE FOR DENMARK
+# =========================================================
+
+def get_dk_energy_balance_by_carrier(n: pypsa.Network) -> pd.DataFrame:
+    """
+    Return time-resolved Denmark energy balance by carrier.
+
+    Positive values are supply to the DK electricity bus.
+    Negative values are consumption from the DK electricity bus.
+    """
+    try:
+        balance = n.statistics.energy_balance(
+            aggregate_time=False,
+            nice_names=False,
+        )
+
+        if "bus" in balance.index.names:
+            balance_dk = balance.xs("DK", level="bus")
+            balance_by_carrier = balance_dk.groupby(level="carrier").sum()
+            balance_by_carrier_t = balance_by_carrier.T
+
+            if len(balance_by_carrier_t.index) == len(n.snapshots):
+                balance_by_carrier_t.index = n.snapshots
+
+            balance_by_carrier_t = balance_by_carrier_t.rename(
+                columns=lambda c: map_carrier_to_display_name(c)
+            )
+            balance_by_carrier_t = balance_by_carrier_t.T.groupby(level=0).sum().T
+            balance_by_carrier_t = drop_empty_carriers(balance_by_carrier_t)
+            balance_by_carrier_t = reorder_columns(
+                balance_by_carrier_t,
+                ENERGY_BALANCE_ORDER,
+            )
+
+            print("Using n.statistics.energy_balance() for DK energy balance.")
+            return balance_by_carrier_t
+
+    except Exception as error:
+        print(
+            "Could not extract DK balance directly from n.statistics.energy_balance(). "
+            f"Falling back to component-based balance. Reason: {error}"
+        )
+
+    print(
+        "Using component-based DK energy balance because the statistics output "
+        "does not expose a usable bus-level index."
+    )
+
+    balance_by_carrier_t = pd.DataFrame(index=n.snapshots)
+
+    dk_loads = n.loads[n.loads.bus == "DK"].index
+    if len(dk_loads) > 0:
+        balance_by_carrier_t["electricity"] = -n.loads_t.p_set[dk_loads].sum(axis=1)
+
+    dk_generators = n.generators[n.generators.bus == "DK"]
+
+    for generator in dk_generators.index:
+        carrier = map_carrier_to_display_name(n.generators.at[generator, "carrier"])
+
+        if carrier not in balance_by_carrier_t.columns:
+            balance_by_carrier_t[carrier] = 0.0
+
+        balance_by_carrier_t[carrier] = balance_by_carrier_t[carrier].add(
+            n.generators_t.p[generator],
+            fill_value=0.0,
+        )
+
+    if "DK_battery_charger" in n.links.index:
+        balance_by_carrier_t["battery charger"] = -n.links_t.p0[
+            "DK_battery_charger"
+        ].clip(lower=0.0)
+
+    if "DK_battery_discharger" in n.links.index:
+        balance_by_carrier_t["battery discharger"] = n.links_t.p0[
+            "DK_battery_discharger"
+        ].clip(lower=0.0)
+
+    balance_by_carrier_t = drop_empty_carriers(balance_by_carrier_t)
+    balance_by_carrier_t = reorder_columns(
+        balance_by_carrier_t,
+        ENERGY_BALANCE_ORDER,
+    )
+
+    return balance_by_carrier_t
+
+
+# =========================================================
+# PLOTS
+# =========================================================
+
+def plot_interconnector_summary(n: pypsa.Network, folder: Path) -> None:
+    """
+    Create interconnector_summary.png and save the underlying data.
+    """
     preferred_lines = ["DK_NO", "DK_SE", "DK_DE"]
     lines = [line for line in preferred_lines if line in n.lines.index]
 
@@ -190,15 +606,11 @@ def plot_interconnector_summary(n, folder):
         bus0 = n.lines.loc[line, "bus0"]
 
         if bus0 == "DK":
-            export_MWh = flow.clip(lower=0).sum()
-            import_MWh = (-flow).clip(lower=0).sum()
+            export_mwh = flow.clip(lower=0).sum()
+            import_mwh = (-flow).clip(lower=0).sum()
         else:
-            import_MWh = flow.clip(lower=0).sum()
-            export_MWh = (-flow).clip(lower=0).sum()
-
-        annual_import_GWh = import_MWh / 1000
-        annual_export_GWh = export_MWh / 1000
-        line_capacity_GW = s_nom / 1000
+            import_mwh = flow.clip(lower=0).sum()
+            export_mwh = (-flow).clip(lower=0).sum()
 
         loading = flow.abs() / s_nom
         near_cap_hours = int((loading >= 0.99).sum())
@@ -208,9 +620,9 @@ def plot_interconnector_summary(n, folder):
         data.append(
             {
                 "Line": line.replace("_", "-"),
-                "Annual imports to DK [GWh]": annual_import_GWh,
-                "Annual exports from DK [GWh]": annual_export_GWh,
-                "Line capacity [GW]": line_capacity_GW,
+                "Annual imports to DK [GWh]": import_mwh / 1000,
+                "Annual exports from DK [GWh]": export_mwh / 1000,
+                "Line capacity [GW]": s_nom / 1000,
                 "Share of year near capacity [%]": share_pct,
             }
         )
@@ -218,7 +630,7 @@ def plot_interconnector_summary(n, folder):
     df = pd.DataFrame(data)
     df.to_csv(folder / "interconnector_summary.csv", index=False)
 
-    fig, ax1 = plt.subplots(figsize=(10, 6))
+    fig, ax1 = plt.subplots(figsize=(9.5, 5.4))
 
     x = np.arange(len(lines))
     width = 0.35
@@ -228,8 +640,8 @@ def plot_interconnector_summary(n, folder):
         df["Annual imports to DK [GWh]"],
         width,
         label="Imports to DK",
-        color="tab:blue",
-        alpha=0.8,
+        color="#2E86AB",
+        alpha=0.9,
     )
 
     ax1.bar(
@@ -237,47 +649,51 @@ def plot_interconnector_summary(n, folder):
         df["Annual exports from DK [GWh]"],
         width,
         label="Exports from DK",
-        color="orange",
-        alpha=0.8,
+        color="#D08770",
+        alpha=0.9,
     )
 
     ax1.set_xlabel("Interconnector")
     ax1.set_ylabel("Annual energy [GWh]")
     ax1.set_xticks(x)
     ax1.set_xticklabels(df["Line"])
-    ax1.grid(True, alpha=0.3)
+    ax1.tick_params(axis="both", labelsize=REPORT_FONT_SIZE)
+    ax1.grid(axis="y", alpha=0.3)
+    ax1.set_axisbelow(True)
 
     ax2 = ax1.twinx()
     ax2.plot(
         x,
         df["Line capacity [GW]"],
         color="black",
-        linewidth=2,
+        linewidth=2.0,
         marker="o",
-        label="Line capacity [GW]",
+        label="Line capacity",
     )
 
-    ax2.set_ylabel("Line capacity [GW]", color="black")
-    ax2.tick_params(axis="y", labelcolor="black")
+    ax2.set_ylabel("Line capacity [GW]")
+    ax2.tick_params(axis="y", labelsize=REPORT_FONT_SIZE)
 
     bars = ax1.get_legend_handles_labels()
-    lines_legend = ax2.get_legend_handles_labels()
+    line_legend = ax2.get_legend_handles_labels()
 
     ax1.legend(
-        bars[0] + lines_legend[0],
-        bars[1] + lines_legend[1],
-        loc="upper left",
+        bars[0] + line_legend[0],
+        bars[1] + line_legend[1],
+        loc="upper right",
+        frameon=True,
+        framealpha=0.95,
     )
 
-    ax1.set_title("Denmark interconnector use and fixed capacities")
-
-    plt.tight_layout()
-    plt.savefig(folder / "interconnector_summary.png", dpi=300, bbox_inches="tight")
-    plt.close()
+    fig.tight_layout()
+    save_figure(fig, folder / "interconnector_summary.png")
+    plt.close(fig)
 
 
-def plot_interconnector_utilisation_comparison(n, folder):
-    """Create monthly interconnector utilisation comparison."""
+def plot_interconnector_utilisation_comparison(n: pypsa.Network, folder: Path) -> None:
+    """
+    Create monthly interconnector utilisation comparison.
+    """
     monthly_data = {}
 
     for line in n.lines.index:
@@ -294,21 +710,11 @@ def plot_interconnector_utilisation_comparison(n, folder):
 
     df.to_csv(folder / "interconnector_utilisation_comparison.csv")
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(9.5, 5.4))
 
     months = [
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec",
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ]
 
     x = np.arange(1, 13)
@@ -318,7 +724,7 @@ def plot_interconnector_utilisation_comparison(n, folder):
             x,
             df[interconnector],
             marker="o",
-            linewidth=2,
+            linewidth=2.0,
             label=interconnector,
         )
 
@@ -327,21 +733,25 @@ def plot_interconnector_utilisation_comparison(n, folder):
     ax.set_xticks(x)
     ax.set_xticklabels(months)
     ax.set_ylim(0, 100)
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="lower right")
-    ax.set_title("Interconnector utilisation over months")
+    ax.tick_params(axis="both", labelsize=REPORT_FONT_SIZE)
+    ax.grid(axis="y", alpha=0.3)
+    ax.set_axisbelow(True)
 
-    plt.tight_layout()
-    plt.savefig(
-        folder / "interconnector_utilisation_comparison.png",
-        dpi=300,
-        bbox_inches="tight",
+    ax.legend(
+        loc="upper right",
+        frameon=True,
+        framealpha=0.95,
     )
-    plt.close()
+
+    fig.tight_layout()
+    save_figure(fig, folder / "interconnector_utilisation_comparison.png")
+    plt.close(fig)
 
 
-def analyze_denmark_export_origin(n, folder):
-    """Analyze the origin of Denmark's exports: local surplus versus re-exported imports."""
+def analyze_denmark_export_origin(n: pypsa.Network, folder: Path) -> None:
+    """
+    Analyze the origin of Denmark's exports: local surplus versus re-exported imports.
+    """
     dk_gens = n.generators[n.generators.bus == "DK"]
     dk_generation = n.generators_t.p[dk_gens.index].sum(axis=1)
 
@@ -411,21 +821,11 @@ def analyze_denmark_export_origin(n, folder):
     df_save = df.drop(columns=["Check"])
     df_save.to_csv(folder / "denmark_export_origin.csv", index=False)
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(9.5, 5.4))
 
     months = [
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec",
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ]
 
     x = np.arange(1, 13)
@@ -434,8 +834,8 @@ def analyze_denmark_export_origin(n, folder):
         x,
         df["Exports from DK surplus [GWh]"],
         label="Exports from DK surplus",
-        color="orange",
-        alpha=0.8,
+        color="#D08770",
+        alpha=0.9,
     )
 
     ax.bar(
@@ -443,7 +843,7 @@ def analyze_denmark_export_origin(n, folder):
         df["Re-exported imports [GWh]"],
         bottom=df["Exports from DK surplus [GWh]"],
         label="Re-exported imports",
-        color="navajowhite",
+        color="#EBCB8B",
         alpha=0.9,
     )
 
@@ -451,7 +851,8 @@ def analyze_denmark_export_origin(n, folder):
         x,
         df["Exports total [GWh]"],
         color="black",
-        linewidth=2,
+        linewidth=2.0,
+        marker="o",
         label="Total exports",
     )
 
@@ -459,65 +860,25 @@ def analyze_denmark_export_origin(n, folder):
     ax.set_ylabel("Exports [GWh]")
     ax.set_xticks(x)
     ax.set_xticklabels(months)
-    ax.legend()
-    ax.grid(True, axis="y", alpha=0.3)
-    ax.set_title("Origin of Denmark exports in the model case")
+    ax.tick_params(axis="both", labelsize=REPORT_FONT_SIZE)
+    ax.grid(axis="y", alpha=0.3)
+    ax.set_axisbelow(True)
 
-    plt.tight_layout()
-    plt.savefig(folder / "denmark_export_origin.png", dpi=300, bbox_inches="tight")
-    plt.close()
+    ax.legend(
+        loc="upper right",
+        frameon=True,
+        framealpha=0.95,
+    )
 
-
-def save_data_for_last_step(n, folder):
-    """Save CSV with first-timestep bus imbalances and line flows."""
-    first_ts = n.snapshots[0]
-
-    rows = []
-
-    for bus in n.buses.index:
-        gens_at_bus = n.generators[n.generators.bus == bus]
-        loads_at_bus = n.loads[n.loads.bus == bus]
-
-        gen_total = n.generators_t.p.loc[first_ts, gens_at_bus.index].sum()
-        demand_total = n.loads_t.p_set.loc[first_ts, loads_at_bus.index].sum()
-
-        imbalance = gen_total - demand_total
-
-        rows.append(
-            {
-                "Type": "bus",
-                "Name": bus,
-                "bus0": "",
-                "bus1": "",
-                "Generation [MW]": gen_total,
-                "Demand [MW]": demand_total,
-                "Imbalance [MW]": imbalance,
-                "Flow p0 [MW]": np.nan,
-            }
-        )
-
-    for line in n.lines.index:
-        flow = n.lines_t.p0.loc[first_ts, line]
-
-        rows.append(
-            {
-                "Type": "line",
-                "Name": line,
-                "bus0": n.lines.loc[line, "bus0"],
-                "bus1": n.lines.loc[line, "bus1"],
-                "Generation [MW]": np.nan,
-                "Demand [MW]": np.nan,
-                "Imbalance [MW]": np.nan,
-                "Flow p0 [MW]": flow,
-            }
-        )
-
-    df = pd.DataFrame(rows)
-    df.to_csv(folder / "data_for_last_step.csv", index=False)
+    fig.tight_layout()
+    save_figure(fig, folder / "denmark_export_origin.png")
+    plt.close(fig)
 
 
-def save_generation_summary_by_country(n, folder):
-    """Save and plot optimized generation capacity by country and technology."""
+def save_generation_summary_by_country(n: pypsa.Network, folder: Path) -> None:
+    """
+    Save and plot optimized generation capacity by country and technology.
+    """
     rows = []
 
     for gen in n.generators.index:
@@ -529,8 +890,8 @@ def save_generation_summary_by_country(n, folder):
         else:
             capacity = n.generators.loc[gen, "p_nom"]
 
-        annual_generation_MWh = n.generators_t.p[gen].sum()
-        annual_generation_GWh = annual_generation_MWh / 1000
+        annual_generation_mwh = n.generators_t.p[gen].sum()
+        annual_generation_gwh = annual_generation_mwh / 1000
 
         rows.append(
             {
@@ -538,7 +899,7 @@ def save_generation_summary_by_country(n, folder):
                 "Generator": gen,
                 "Carrier": carrier,
                 "Optimized capacity [MW]": capacity,
-                "Annual generation [GWh]": annual_generation_GWh,
+                "Annual generation [GWh]": annual_generation_gwh,
             }
         )
 
@@ -577,6 +938,8 @@ def save_generation_summary_by_country(n, folder):
     preferred_tech_order = [
         "coal",
         "gas",
+        "gas CCGT",
+        "CCGT",
         "nuclear",
         "offwind",
         "onwind",
@@ -587,18 +950,9 @@ def save_generation_summary_by_country(n, folder):
     remaining_tech = [t for t in plot_df.columns if t not in tech_order]
     plot_df = plot_df[tech_order + remaining_tech]
 
-    color_map = {
-        "coal": "#4C566A",
-        "gas": "#D08770",
-        "nuclear": "#7AA66D",
-        "offwind": "#2E86AB",
-        "onwind": "#8F6FB5",
-        "solar": "#EBCB3B",
-    }
+    colors = [get_carrier_color(col) for col in plot_df.columns]
 
-    colors = [color_map.get(col, "#999999") for col in plot_df.columns]
-
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(9.5, 5.4))
 
     plot_df.plot(
         kind="bar",
@@ -610,39 +964,35 @@ def save_generation_summary_by_country(n, folder):
 
     ax.set_xlabel("Country")
     ax.set_ylabel("Optimized capacity [MW]")
-    ax.set_title("Optimized generation capacity by country and technology")
-    ax.legend(title="Technology", bbox_to_anchor=(1.02, 1), loc="upper left")
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.tick_params(axis="x", labelrotation=0, labelsize=REPORT_FONT_SIZE)
+    ax.tick_params(axis="y", labelsize=REPORT_FONT_SIZE)
+    ax.grid(axis="y", alpha=0.3)
+    ax.set_axisbelow(True)
 
-    plt.tight_layout()
-    plt.savefig(
-        folder / "generation_capacity_by_country_and_technology.png",
-        dpi=300,
-        bbox_inches="tight",
+    ax.legend(
+        loc="upper right",
+        frameon=True,
+        framealpha=0.95,
+        ncol=2,
     )
-    plt.close()
+
+    fig.tight_layout()
+    save_figure(fig, folder / "generation_capacity_by_country_and_technology.png")
+    plt.close(fig)
 
 
-def plot_denmark_dispatch_strategy(n, folder):
+def plot_denmark_dispatch_strategy(n: pypsa.Network, folder: Path) -> None:
     """
     Plot Denmark's dispatch strategy for the winter week with the highest
     average Danish electricity demand.
 
-    The figure shows:
-    - Danish domestic generation by carrier as stacked area
-    - Danish demand as black line
-    - imports/exports with neighbouring countries in a separate panel
+    The upper panel uses the Denmark electricity-bus energy balance by carrier.
+    The lower panel shows imports and exports with neighbouring countries.
 
     Positive exchange values mean imports to Denmark.
     Negative exchange values mean exports from Denmark.
-
-    Saves:
-        denmark_dispatch_strategy_winter_week.png
-        denmark_dispatch_strategy_winter_week.csv
     """
-
     snapshots = n.snapshots
-
     winter_mask = (snapshots.month == 12) | (snapshots.month == 1)
 
     if "DK_electricity_demand" not in n.loads_t.p_set.columns:
@@ -663,39 +1013,23 @@ def plot_denmark_dispatch_strategy(n, folder):
     week_index = dk_load.loc[week_start:week_end].index
     week_load = dk_load.loc[week_index]
 
-    # -----------------------------
-    # Denmark domestic generation
-    # -----------------------------
-    dk_generators = n.generators[n.generators.bus == "DK"]
+    dk_balance = get_dk_energy_balance_by_carrier(n)
+    week_balance = dk_balance.loc[week_index].copy()
+    week_balance = reorder_columns(week_balance, ENERGY_BALANCE_ORDER)
 
-    generation_by_carrier = {}
+    generation_columns = [
+        carrier for carrier in GENERATION_STACK_ORDER if carrier in week_balance.columns
+    ]
 
-    for gen in dk_generators.index:
-        carrier = n.generators.at[gen, "carrier"]
+    generation_stack = week_balance[generation_columns].clip(lower=0.0)
+    generation_stack = drop_empty_carriers(generation_stack)
+    generation_stack = reorder_columns(generation_stack, GENERATION_STACK_ORDER)
 
-        if carrier not in generation_by_carrier:
-            generation_by_carrier[carrier] = pd.Series(0.0, index=week_index)
-
-        generation_by_carrier[carrier] = generation_by_carrier[carrier].add(
-            n.generators_t.p[gen].loc[week_index],
-            fill_value=0.0,
-        )
-
-    # -----------------------------
-    # Battery dispatch, if available
-    # -----------------------------
     battery_charge = pd.Series(0.0, index=week_index)
 
-    if "DK_battery_discharger" in n.links.index:
-        discharge = n.links_t.p0["DK_battery_discharger"].loc[week_index]
-        generation_by_carrier["battery_discharge"] = discharge.clip(lower=0)
+    if "battery charger" in week_balance.columns:
+        battery_charge = (-week_balance["battery charger"]).clip(lower=0.0)
 
-    if "DK_battery_charger" in n.links.index:
-        battery_charge = n.links_t.p0["DK_battery_charger"].loc[week_index].clip(lower=0)
-
-    # -----------------------------
-    # Imports and exports by neighbour
-    # -----------------------------
     dk_lines = n.lines[(n.lines.bus0 == "DK") | (n.lines.bus1 == "DK")]
 
     exchanges = {}
@@ -720,73 +1054,39 @@ def plot_denmark_dispatch_strategy(n, folder):
             fill_value=0.0,
         )
 
-    # -----------------------------
-    # Save data behind the plot
-    # -----------------------------
     output_data = pd.DataFrame(index=week_index)
     output_data["DK demand [MW]"] = week_load
     output_data["Battery charge [MW]"] = battery_charge
 
-    for carrier, series in generation_by_carrier.items():
-        output_data[f"DK {carrier} generation [MW]"] = series
+    for carrier in week_balance.columns:
+        output_data[f"DK balance {carrier} [MW]"] = week_balance[carrier]
 
     for neighbour, series in exchanges.items():
         output_data[f"DK exchange with {neighbour} [MW]"] = series
 
     output_data.to_csv(folder / "denmark_dispatch_strategy_winter_week.csv")
 
-    # -----------------------------
-    # Plot
-    # -----------------------------
-    preferred_order = [
-        "solar",
-        "onwind",
-        "offwind",
-        "gas",
-        "coal",
-        "nuclear",
-        "battery_discharge",
-    ]
-
-    remaining = [c for c in generation_by_carrier if c not in preferred_order]
-    carrier_order = [c for c in preferred_order if c in generation_by_carrier] + remaining
-
-    colors = {
-        "solar": "#EBCB3B",
-        "onwind": "#8F6FB5",
-        "offwind": "#2E86AB",
-        "gas": "#D08770",
-        "coal": "#4C566A",
-        "nuclear": "#7AA66D",
-        "battery_discharge": "#ff7f00",
-    }
-
-    exchange_colors = {
-        "DE": "#2ca02c",
-        "SE": "#ff7f0e",
-        "NO": "#1f77b4",
-    }
-
     fig, (ax1, ax2) = plt.subplots(
         2,
         1,
-        figsize=(14, 9),
+        figsize=(11.5, 7.2),
         sharex=True,
         gridspec_kw={"height_ratios": [3, 1]},
     )
 
     bottom = np.zeros(len(week_index))
 
-    for carrier in carrier_order:
-        series = generation_by_carrier[carrier].fillna(0.0).values
+    for carrier in generation_stack.columns:
+        series = generation_stack[carrier].fillna(0.0).values
 
         ax1.fill_between(
             week_index,
             bottom,
             bottom + series,
-            label=f"DK {carrier}",
-            color=colors.get(carrier, None),
-            alpha=0.85,
+            label=carrier,
+            color=get_carrier_color(carrier),
+            alpha=0.9,
+            linewidth=0.0,
         )
 
         bottom += series
@@ -798,60 +1098,77 @@ def plot_denmark_dispatch_strategy(n, folder):
             color="grey",
             linewidth=1.8,
             linestyle="--",
-            label="DK demand incl. battery charging",
+            label="Demand incl. battery charging",
         )
 
     ax1.plot(
         week_index,
         week_load,
         color="black",
-        linewidth=2.3,
+        linewidth=2.2,
         label="DK demand",
     )
 
     ax1.set_ylabel("Power [MW]")
-    ax1.set_title("Denmark dispatch strategy during peak winter week")
-    ax1.legend(loc="upper left", bbox_to_anchor=(1.01, 1))
-    ax1.grid(True, alpha=0.3)
+    ax1.tick_params(axis="both", labelsize=REPORT_FONT_SIZE)
+    ax1.grid(axis="y", alpha=0.3)
+    ax1.set_axisbelow(True)
 
     for neighbour, series in exchanges.items():
         ax2.plot(
             week_index,
             series,
-            linewidth=2.3,
-            label=f"{neighbour}",
-            color=exchange_colors.get(neighbour, None),
+            linewidth=2.0,
+            label=neighbour,
+            color=EXCHANGE_COLORS.get(neighbour, None),
         )
 
-    ax2.axhline(0, color="black", linewidth=1)
-    ax2.set_ylabel("Import / Export [MW]")
+    ax2.axhline(0, color="black", linewidth=1.0)
+    ax2.set_ylabel("Exchange [MW]")
     ax2.set_xlabel("Time")
-    ax2.legend(title="Exchange", loc="upper left", bbox_to_anchor=(1.01, 1))
-    ax2.grid(True, alpha=0.3)
+    ax2.tick_params(axis="both", labelsize=REPORT_FONT_SIZE)
+    ax2.grid(axis="y", alpha=0.3)
+    ax2.set_axisbelow(True)
 
-    fig.autofmt_xdate(rotation=45)
-    plt.tight_layout()
+    ax1.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.25),
+        ncol=3,
+        frameon=True,
+        framealpha=0.95,
+    )
+
+    ax2.legend(
+        loc="upper right",
+        ncol=3,
+        frameon=True,
+        framealpha=0.95,
+    )
+
+    fig.autofmt_xdate(rotation=0)
+    fig.tight_layout()
 
     outfile = folder / "denmark_dispatch_strategy_winter_week.png"
-    plt.savefig(outfile, dpi=300, bbox_inches="tight")
-    plt.close()
+    save_figure(fig, outfile)
+    plt.close(fig)
 
     print(f"Saved Denmark dispatch strategy plot to {outfile}")
 
 
-def main():
-    """Main function to run the analysis."""
-    project_root = pathlib.Path("/home/tom/PycharmProjects/IES")
+# =========================================================
+# MAIN
+# =========================================================
 
-    weather_year = 2016
-    countries = ["DK", "DE", "SE", "NO"]
-    with_battery_storage = True
-    with_interconnectors = True
+def main() -> None:
+    """
+    Main function to run the analysis.
+    """
+    set_report_plot_style()
 
-    network_file = project_root / "results" / "networks" / f"interconnected_{weather_year}.nc"
+    network_file = NETWORK_DIR / NETWORK_NAME
 
     n = load_network(network_file)
-    folder = create_analysis_folder(project_root)
+    folder = create_analysis_folder(PROJECT_ROOT)
 
     print_system_summary(n)
 
@@ -864,10 +1181,10 @@ def main():
     analyze_denmark_export_origin(n, folder)
     save_data_for_last_step(n, folder)
     save_generation_summary_by_country(n, folder)
-
     plot_denmark_dispatch_strategy(n, folder)
 
     print(f"\nAnalysis complete. Files saved in {folder}")
+
 
 if __name__ == "__main__":
     main()

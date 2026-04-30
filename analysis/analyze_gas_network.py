@@ -1,3 +1,4 @@
+import csv
 import pathlib
 import matplotlib.pyplot as plt
 import pypsa
@@ -212,6 +213,101 @@ def plot_co2_sensitivity_sidebyside(folder):
 
 
 # ---------------------------------------------------------------------------
+# Electricity vs gas comparison
+# ---------------------------------------------------------------------------
+
+def _elec_corridor_flows(n):
+    """Return {(country_a, country_b): bidirectional_flow_TWh} for AC lines."""
+    flows = {}
+    for line in n.lines.index:
+        a = n.lines.loc[line, "bus0"].split("_")[0]
+        b = n.lines.loc[line, "bus1"].split("_")[0]
+        key = tuple(sorted([a, b]))
+        flows[key] = flows.get(key, 0.0) + n.lines_t.p0[line].abs().sum() / 1e6
+    return flows
+
+
+def compare_electricity_vs_gas(n_ch4, n_h2, folder):
+    """Print a corridor-level comparison of electricity vs gas pipeline throughput.
+
+    For electricity, checks whether n_ch4 already contains AC lines; if not,
+    falls back to loading interconnected_2016.nc. Results are printed to stdout
+    and saved to electricity_vs_gas_comparison.csv.
+    """
+    if len(n_ch4.lines) > 0:
+        n_elec = n_ch4
+        elec_label = "CH4-scenario AC lines (2019)"
+    else:
+        elec_path = pathlib.Path("results/networks/interconnected_2016.nc")
+        if not elec_path.exists():
+            print("No electricity network found — skipping electricity vs gas comparison.")
+            return
+        n_elec = load_network(elec_path)
+        elec_label = "interconnected_2016 (different year from gas scenarios — cross-year indicative)"
+
+    elec_flows = _elec_corridor_flows(n_elec)
+    ch4_flows  = _corridor_flows(n_ch4, "CH4 pipeline")
+    h2_flows   = _corridor_flows(n_h2,  "H2 pipeline")
+
+    all_corridors = sorted(set(elec_flows) | set(ch4_flows) | set(h2_flows))
+
+    total_elec = sum(elec_flows.values())
+    total_ch4  = sum(ch4_flows.values())
+    total_h2   = sum(h2_flows.values())
+
+    print("\n" + "=" * 68)
+    print("ELECTRICITY vs GAS NETWORK COMPARISON")
+    print(f"Electricity source: {elec_label}")
+    print("=" * 68)
+
+    print(f"\n{'Corridor':<10} {'Electricity [TWh]':>20} {'CH4 [TWh]':>12} {'H2 [TWh]':>11} {'Dominant':>12}")
+    print("-" * 67)
+
+    rows = []
+    for a, b in all_corridors:
+        elec = elec_flows.get((a, b), 0.0)
+        ch4  = ch4_flows.get((a, b), 0.0)
+        h2   = h2_flows.get((a, b), 0.0)
+        dominant = max([("electricity", elec), ("CH4", ch4), ("H2", h2)], key=lambda x: x[1])[0]
+        print(f"{a}-{b:<7} {elec:>20.1f} {ch4:>12.1f} {h2:>11.1f} {dominant:>12}")
+        rows.append({"corridor": f"{a}-{b}", "electricity_TWh": round(elec, 2),
+                     "CH4_TWh": round(ch4, 2), "H2_TWh": round(h2, 2), "dominant": dominant})
+
+    print("-" * 67)
+    print(f"{'TOTAL':<10} {total_elec:>20.1f} {total_ch4:>12.1f} {total_h2:>11.1f}")
+
+    print("\n--- System-level ratios ---")
+    if total_ch4 > 0:
+        print(f"  Electricity / CH4 : {total_elec / total_ch4:.2f}x")
+    if total_h2 > 0:
+        print(f"  Electricity / H2  : {total_elec / total_h2:.2f}x")
+    if total_ch4 > 0 and total_h2 > 0:
+        print(f"  CH4 / H2          : {total_ch4 / total_h2:.2f}x")
+
+    print("\n--- Corridors where gas throughput exceeds electricity ---")
+    any_gas_dominant = False
+    for a, b in all_corridors:
+        elec = elec_flows.get((a, b), 0.0)
+        ch4  = ch4_flows.get((a, b), 0.0)
+        h2   = h2_flows.get((a, b), 0.0)
+        gas_max = max(ch4, h2)
+        if gas_max > elec:
+            any_gas_dominant = True
+            gas_type = "CH4" if ch4 >= h2 else "H2"
+            print(f"  {a}-{b}: {gas_type} pipeline ({gas_max:.1f} TWh) > electricity ({elec:.1f} TWh), ratio {gas_max / elec:.2f}x")
+    if not any_gas_dominant:
+        print("  Electricity dominates on every corridor.")
+
+    csv_path = folder / "electricity_vs_gas_comparison.csv"
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["corridor", "electricity_TWh", "CH4_TWh", "H2_TWh", "dominant"])
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"\nSaved electricity_vs_gas_comparison.csv")
+    print("=" * 68 + "\n")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -223,6 +319,7 @@ def main():
     plot_network_maps(n_ch4, n_h2, folder)
     plot_co2_sensitivity(folder)
     plot_co2_sensitivity_sidebyside(folder)
+    compare_electricity_vs_gas(n_ch4, n_h2, folder)
 
     print(f"Done. Results in {folder}")
 
